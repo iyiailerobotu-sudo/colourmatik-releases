@@ -3,4 +3,4 @@
 Match one video/image's colours to a reference with measurable (dE00) accuracy,
 fully local, output a 3D .cube LUT for Premiere Lumetri / Resolve / any NLE.
 """
-__version__ = "1.7.7"
+__version__ = "1.7.8"

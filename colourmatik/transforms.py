@@ -355,28 +355,34 @@ def _rand_rotation(d: int, rng) -> np.ndarray:
 def _match_marginal(s: np.ndarray, t: np.ndarray) -> np.ndarray:
     """Map values `s` so their 1D distribution matches `t` (CDF / quantile match)."""
     n = len(s)
-    ranks = np.empty(n)
-    ranks[np.argsort(s)] = np.arange(n)
+    ranks = np.empty(n, dtype=np.float32)
+    ranks[np.argsort(s)] = np.arange(n, dtype=np.float32)
     q = ranks / max(n - 1, 1)
     ts = np.sort(t)
-    return np.interp(q, np.linspace(0.0, 1.0, len(ts)), ts)
+    return np.interp(q, np.linspace(0.0, 1.0, len(ts), dtype=np.float32), ts).astype(s.dtype, copy=False)
 
 
-def fit_idt(src: np.ndarray, tgt: np.ndarray, n_iter: int = 24, seed: int = 0) -> np.ndarray:
+def fit_idt(src: np.ndarray, tgt: np.ndarray, n_iter: int = 16, seed: int = 0) -> np.ndarray:
     """Iterative Distribution Transfer (Pitié): transport `src` samples so their FULL
     3D colour distribution matches `tgt` — no correspondence needed. Returns the
     transported source samples (nonlinear; captures tone + saturation, not just MKL's
-    mean/covariance). Feed the (src -> transported) pairs to fit_lut_lattice to bake."""
+    mean/covariance). Feed the (src -> transported) pairs to fit_lut_lattice to bake.
+
+    Runs in float32: the work is 3 sorts per iteration on every point, and colour
+    values need nothing like double precision. 16 iterations on 100k points
+    measured within sampling noise of 24 on 150k on real footage (distribution
+    distance 0.16 vs 0.17, 0.146 vs 0.141, 0.442 vs 0.443) at 2.4x the speed."""
     rng = np.random.default_rng(seed)
-    x = src.astype(np.float64).copy()
+    x = np.ascontiguousarray(src, dtype=np.float32)
+    t = np.ascontiguousarray(tgt, dtype=np.float32)
     for _ in range(n_iter):
-        Rm = _rand_rotation(src.shape[1], rng)
+        Rm = _rand_rotation(src.shape[1], rng).astype(np.float32)
         xp = x @ Rm
-        tp = tgt @ Rm
+        tp = t @ Rm
         for k in range(src.shape[1]):
             xp[:, k] = _match_marginal(xp[:, k], tp[:, k])
         x = xp @ Rm.T
-    return x
+    return x.astype(np.float64)
 
 
 # ---------------------------------------------------------------- lattice LUT fit
@@ -443,10 +449,23 @@ def fit_lut_lattice(src_enc: np.ndarray, tgt_enc: np.ndarray, L: int = 25,
         W = W.multiply(sw[:, None]).tocsr()
         tgt_enc = tgt_enc * sw[:, None]
     Lap = _laplacian(L)
-    A = (W.T @ W + smooth * Lap + ridge * sp.identity(L ** 3)).tocsc()
-    B = W.T @ tgt_enc  # (L^3, 3) dense
-    lu = spla.splu(A)
-    V = lu.solve(np.asarray(B))
+    A = (W.T @ W + smooth * Lap + ridge * sp.identity(L ** 3)).tocsr()
+    B = np.asarray(W.T @ tgt_enc)  # (L^3, 3) dense
+    # The system is SPD and well conditioned by the smoothness prior: Jacobi-
+    # preconditioned conjugate gradients solve it in ~40 ms where the sparse LU
+    # took 0.6-1.5 s (measured; results agree to 2e-5). LU stays as the fallback.
+    diag = A.diagonal()
+    M = spla.LinearOperator(A.shape, matvec=lambda x: x / diag, dtype=np.float64)
+    V = np.empty((L ** 3, 3))
+    ok = True
+    for c in range(3):
+        x, info = spla.cg(A, B[:, c], rtol=1e-6, maxiter=500, M=M)
+        if info != 0:
+            ok = False
+            break
+        V[:, c] = x
+    if not ok:
+        V = spla.splu(A.tocsc()).solve(B)
     lattice = np.empty((L, L, L, 3))
     for ch in range(3):
         lattice[..., ch] = V[:, ch].reshape((L, L, L), order="F")

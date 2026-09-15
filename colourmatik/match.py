@@ -135,8 +135,9 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
             corresponded = False
         _CORR_PRECHECK = corr
 
-    S_lin = cs.decode(src_enc, tf).reshape(-1, 3)
-    T_lin = cs.decode(tgt_enc, tf).reshape(-1, 3)
+    # Decode to linear only what is SAMPLED: the full frame stack (14.5M pixels
+    # for 7 pooled 1080p frames) was being decoded and then 300k of it used -
+    # 1.1 s and 350 MB per match for nothing.
     S_enc = src_enc.reshape(-1, 3)
     T_enc = tgt_enc.reshape(-1, 3)
 
@@ -156,19 +157,21 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
                 if n_total > sample else np.arange(n_total))
 
     idx = _pick(S_enc.shape[0])          # source sample indices (used downstream)
-    Sf_lin, Sf_enc = S_lin[idx], S_enc[idx]
+    Sf_enc = S_enc[idx]
+    Sf_lin = cs.decode(Sf_enc, tf)
     if corresponded:
         # aligned pixels: the reference must be sampled at the SAME indices
-        Tf_lin, Tf_enc = T_lin[idx], T_enc[idx]
+        Tf_enc = T_enc[idx]
     else:
         # independent distributions: sample the reference on its own (clips may
         # differ in resolution / frame count, so indices need not match)
         tidx = _pick(T_enc.shape[0])
-        Tf_lin, Tf_enc = T_lin[tidx], T_enc[tidx]
+        Tf_enc = T_enc[tidx]
+    Tf_lin = cs.decode(Tf_enc, tf)
 
     weights = None
     if skin_protect:
-        skin_p = skin_probability(S_enc)[idx]
+        skin_p = skin_probability(Sf_enc)
         if skin_p.max() > 0.2:  # only when some skin is actually present
             weights = 1.0 + skin_weight * skin_p
 
@@ -234,7 +237,7 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
             # a warm engine at 300k points). A 25^3 lattice has 15,625 nodes —
             # 150k points saturate it; accuracy is checked by the regression
             # battery, wall-clock is roughly halved.
-            _cap = 150_000
+            _cap = 100_000
             if Sf_lin.shape[0] > _cap:
                 _sel = rng.choice(Sf_lin.shape[0], _cap, replace=False)
                 _idt_src_lin, _idt_src_enc = Sf_lin[_sel], Sf_enc[_sel]
@@ -536,7 +539,10 @@ def _naturalness_probe(src_enc: np.ndarray, tf: str,
     a = np.asarray(src_enc, dtype=np.float64)
     if a.ndim != 3:
         a = a.reshape(-1, 1, 3)
-    step = max(1, int(np.ceil(a.shape[1] / 360.0)))
+    # <= 360 px wide AND <= 250k pixels: a 7-frame pooled stack is 7x taller,
+    # and every candidate is applied to this picture
+    step = max(1, int(np.ceil(a.shape[1] / 360.0)),
+               int(np.ceil(np.sqrt(a.shape[0] * a.shape[1] / 250_000.0))))
     img = np.ascontiguousarray(a[::step, ::step])
     luma = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
     flat = img.reshape(-1, 3)

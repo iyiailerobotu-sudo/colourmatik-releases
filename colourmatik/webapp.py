@@ -160,11 +160,20 @@ _LUT_DIRS = [
 
 
 def _install_lut(lut, tf: str, name: str = "colourMatik") -> None:
+    """Drop the winning LUT into Premiere's LUT folders (a convenience for the
+    Lumetri dropdowns). Written once and copied, and called from a background
+    thread by the match: nothing the panel waits for depends on it."""
     with _LOCK:
+        first = None
         for d in _LUT_DIRS:
             try:
                 d.mkdir(parents=True, exist_ok=True)
-                write_cube(d / f"{name}.cube", lut, title=name)
+                dst = d / f"{name}.cube"
+                if first is None:
+                    write_cube(dst, lut, title=name)
+                    first = dst
+                else:
+                    shutil.copyfile(first, dst)
             except Exception:
                 pass
 
@@ -245,9 +254,12 @@ def _preview_dataurl(ref1, src1, matched1, tf, corresponded, job: Path) -> tuple
     if corresponded and src1.shape == ref1.shape:
         db = summarize(image_delta_e00(src1, ref1, tf))["mean"]
         da = summarize(image_delta_e00(matched1, ref1, tf))["mean"]
-    prev = job / "preview.png"
-    make_comparison(ref1, src1, matched1, prev, db, da, show_error=corresponded, tf=tf)
-    return "data:image/png;base64," + _b64.b64encode(prev.read_bytes()).decode(), db, da
+    # The panel shows this at a few hundred pixels: full-size PNG panels made a
+    # 4.4 MB data URL per match (slow to ship, slow to paint). 960 px JPEG panels
+    # look identical there at ~150 KB.
+    prev = job / "preview.jpg"
+    make_comparison(ref1, src1, matched1, prev, db, da, show_error=corresponded, tf=tf, max_w=960)
+    return "data:image/jpeg;base64," + _b64.b64encode(prev.read_bytes()).decode(), db, da
 
 
 def _save_upload(up: UploadFile, dst_dir: Path) -> Path:
@@ -359,7 +371,9 @@ def _process(src_path: Path, ref_path: Path, mode: str, tf: str, frames: int,
     cube = job / "colourMatik.cube"
     write_cube(cube, res.lut, title=title)
     if not fast:
-        _install_lut(res.lut, tf)  # expose in Premiere LUT dropdowns (visible after next launch)
+        # expose in Premiere LUT dropdowns (visible after next launch) - best effort,
+        # off the response path
+        threading.Thread(target=_install_lut, args=(res.lut.copy(), tf), daemon=True).start()
 
     # Preview uses ONE frame — reuse the first frame already decoded above (each
     # pooled VIDEO clip is n frames stacked vertically) instead of decoding again.

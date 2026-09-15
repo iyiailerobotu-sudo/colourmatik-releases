@@ -203,6 +203,18 @@ def test_decode_plan():
     pq_white = cmio._hdr_to_sdr(np.full((1, 1, 3), 0.58), "smpte2084")[0, 0]
     check("PQ 0.58 (~203 nits) -> SDR white", float(pq_white.min()) > 0.93, f"(got {pq_white.round(3)})")
 
+    # frames stream from ffmpeg as PPM: 8-bit, 16-bit (HDR) and a truncated stream
+    rgb8 = (np.arange(2 * 3 * 3) % 256).astype(np.uint8).reshape(3, 2, 3)
+    ppm8 = b"P6\n2 3\n255\n" + rgb8.tobytes()
+    a = cmio._parse_ppm(ppm8)
+    check("PPM 8-bit parsed", a is not None and a.shape == (3, 2, 3) and abs(a[2, 1, 2] * 255 - rgb8[2, 1, 2]) < 1e-9)
+    rgb16 = (np.arange(2 * 3 * 3) * 3000 % 65536).astype(">u2").reshape(3, 2, 3)
+    ppm16 = b"P6\n# comment-free\n2 3\n65535\n" + rgb16.tobytes()
+    b = cmio._parse_ppm(ppm16)
+    check("PPM 16-bit parsed", b is not None and b.shape == (3, 2, 3) and abs(b[1, 0, 1] * 65535 - rgb16[1, 0, 1]) < 1e-6,
+          f"(got {None if b is None else b.shape})")
+    check("PPM truncated -> None (falls back to PNG)", cmio._parse_ppm(ppm16[:-5]) is None)
+
 
 def _scene(rng, h=240, w=360):
     """A soft-lit synthetic 'scene': gradient + shapes, moderate chroma."""

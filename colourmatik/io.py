@@ -288,11 +288,26 @@ def extract_frame(video: str | Path, t: float | None = None) -> np.ndarray:
         t = max(0.0, min(float(t), dur - margin))
     else:
         t = max(0.0, float(t))
-    extra, hdr_trc = _decode_plan(_probe_video(video))
+    info = _probe_video(video)
+    extra, hdr_trc = _decode_plan(info)
+    base = [_ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{t:.3f}",
+            "-i", str(video), "-frames:v", "1"]
+    # Fast path: the frame comes back through a pipe as a PPM (raw bytes with a
+    # header that carries the REAL output size, so a phone clip that ffmpeg
+    # auto-rotates cannot be misread) - no temp file, no PNG encode/decode.
+    # 16-bit PPM for HDR, so the tone-mapping still gets the full signal.
+    vf = [a for a in extra if a != "-pix_fmt" and a != "rgb48be"]
+    pix = ["-pix_fmt", "rgb48be"] if hdr_trc else ["-pix_fmt", "rgb24"]
+    try:
+        r = subprocess.run(base + vf + pix + ["-f", "image2pipe", "-vcodec", "ppm", "-"],
+                           capture_output=True, check=True)
+        img = _parse_ppm(r.stdout)
+        if img is not None:
+            return _hdr_to_sdr(img, hdr_trc) if hdr_trc else img
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        pass
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "frame.png"
-        base = [_ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{t:.3f}",
-                "-i", str(video), "-frames:v", "1"]
         try:
             try:
                 subprocess.run(base + extra + [str(out)], check=True)
@@ -314,6 +329,41 @@ def extract_frame(video: str | Path, t: float | None = None) -> np.ndarray:
             )
         img = load_image(out)
         return _hdr_to_sdr(img, hdr_trc) if hdr_trc else img
+
+
+def _parse_ppm(data: bytes) -> np.ndarray | None:
+    """Binary PPM (P6, 8- or 16-bit) -> float RGB [0,1] (H,W,3); None if not a PPM."""
+    if not data.startswith(b"P6"):
+        return None
+    pos = 2
+    fields = []
+    while len(fields) < 3:
+        while pos < len(data) and (data[pos:pos + 1].isspace() or data[pos:pos + 1] == b"#"):
+            if data[pos:pos + 1] == b"#":          # header comment: skip to end of line
+                nl = data.find(b"\n", pos)
+                pos = len(data) if nl < 0 else nl + 1
+            else:
+                pos += 1
+        start = pos
+        while pos < len(data) and not data[pos:pos + 1].isspace():
+            pos += 1
+        if start == pos:
+            return None
+        fields.append(int(data[start:pos]))
+    pos += 1                                   # the single whitespace after maxval
+    w, h, maxval = fields
+    if w <= 0 or h <= 0:
+        return None
+    n_val = w * h * 3                          # samples; frombuffer counts ELEMENTS
+    if maxval < 256:
+        if len(data) - pos < n_val:
+            return None
+        arr = np.frombuffer(data, dtype=np.uint8, count=n_val, offset=pos).reshape(h, w, 3)
+        return arr.astype(np.float64) / float(maxval)
+    if len(data) - pos < n_val * 2:
+        return None
+    arr = np.frombuffer(data, dtype=">u2", count=n_val, offset=pos).reshape(h, w, 3)
+    return arr.astype(np.float64) / float(maxval)
 
 
 def extract_frames(video: str | Path, n: int = 3,
@@ -352,7 +402,11 @@ def extract_frames(video: str | Path, n: int = 3,
     # corresponded mode, where both clips must keep identical frame indices.
     m = n + 4 if (robust and n >= 5) else n
     times = [lo + span * (i + 1) / (m + 1) for i in range(m)]
-    frames = [_strip_black_bars(extract_frame(video, t)) for t in times]
+    # each frame is an independent ffmpeg seek+decode: run a few at once (the
+    # two clips are already decoded in parallel one level up)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(3, len(times))) as ex:
+        frames = list(ex.map(lambda tt: _strip_black_bars(extract_frame(video, tt)), times))
     if m > n:
         frames = _keep_dominant(frames, n)
     h = min(f.shape[0] for f in frames)

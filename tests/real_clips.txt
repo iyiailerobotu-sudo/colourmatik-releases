@@ -1,0 +1,32 @@
+# Real clips used for the colour-match evaluation sheets (tests/eval_real.py).
+# One path per line; the index (from 0) is what pair files refer to.
+/Users/bo/Downloads/hf_20260722_135058_e70af395-80e8-4b74-a8a5-d27af59a451d.mp4
+/Users/bo/Downloads/hf_20260727_110347_3241a294-720f-4d6d-9953-2908ae74fc6d.mp4
+/Users/bo/Downloads/hf_20260722_162910_692da458-bf20-4f40-b2de-60a52e097262.mp4
+/Users/bo/Downloads/hf_20260730_220936_993ae171-86f9-494a-b8c4-7f4573cdb09a.mp4
+/Users/bo/Downloads/hf_20260706_155453_e94921bb-332c-4a32-afc5-d6185c01881b.mp4
+/Users/bo/Downloads/hf_20260722_152232_d9f14e4c-b850-48ed-ab61-abc3f004865c.mp4
+/Users/bo/Downloads/hf_20260722_130712_285e061e-8e8c-4ed0-ae93-a0910245567a.mp4
+/Users/bo/Downloads/hf_20260707_093312_cfb4c8ee-9bfd-469a-97ff-9a0e6da24522.mp4
+/Users/bo/Downloads/hf_20260821_125018_e55460f1-a0e7-49a4-bb46-5e58bd386b9a.mp4
+/Users/bo/Downloads/TIVIBU_YSMN_040926/hf_20260904_110402_0674718f-27f2-4126-ab26-4f8dc1a72528.mp4
+/Users/bo/Downloads/AG_B09_SHN04_260726.mp4
+/Users/bo/Downloads/AG_B07_S065_4_190726.mp4
+/Users/bo/Downloads/AG_B07_S065_1_190726.mp4
+/Users/bo/Downloads/AG_B05_SHN47_HELIKOPTER_1DURUR_1YANAR.mp4
+/Users/bo/Downloads/AG_B08_SAHNE017_F16_GECIS.mp4
+/Users/bo/Downloads/AG_B013_S070A_020826_AI_KOBRA_KACIS_AI.mp4
+/Users/bo/Downloads/AG_B01_GIRIS_KAPI_PATLAMA_AI_V4.mp4
+/Users/bo/Downloads/AG_B04_S020_F16_180726_f16_UCUS.mp4.mp4
+/Users/bo/Downloads/15TEMMUZ_020926/AG_B015_BINABOMBA_S1.mp4
+/Users/bo/Downloads/15TEMMUZ_020926/AG_B05_S051_AI_05_V2_DUMAN_EKLENDI_1_AI.mp4
+/Users/bo/Downloads/KOC_BATMAN_YASEMIN_020926/VIDEO_ASSETS/A_0006C004_260813_195022_a1CRP (1).mov
+/Users/bo/Downloads/IMG_6750.MOV
+/Users/bo/Downloads/ISPARTA_GUL_BO_OZANA2.mov
+/Users/bo/Downloads/ARMAGAN_BO_210826.mov
+/Users/bo/Downloads/FootageCrate-Sparky_Dust_Explosion_Ground_23-4K.mp4
+/Users/bo/Downloads/KOÇ_ANLATIM VIDEO.mov
+/Users/bo/Downloads/kuş-kordidor -REVİZE.mp4
+/Users/bo/Downloads/ALP_SWORD_2.mp4
+/Users/bo/Downloads/KOC_EGITIM_300726/hf_20260730_160602_603e41eb-10be-4053-a2fa-2daa0bf1e8fe.mp4
+/Users/bo/Downloads/hf_20260713_111013_6e9f3c79-aaa4-43ef-87f1-f8895df24f64.mp4
