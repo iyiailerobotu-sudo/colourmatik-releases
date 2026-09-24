@@ -454,16 +454,22 @@ def fit_lut_lattice(src_enc: np.ndarray, tgt_enc: np.ndarray, L: int = 25,
     # The system is SPD and well conditioned by the smoothness prior: Jacobi-
     # preconditioned conjugate gradients solve it in ~40 ms where the sparse LU
     # took 0.6-1.5 s (measured; results agree to 2e-5). LU stays as the fallback.
-    diag = A.diagonal()
-    M = spla.LinearOperator(A.shape, matvec=lambda x: x / diag, dtype=np.float64)
     V = np.empty((L ** 3, 3))
     ok = True
-    for c in range(3):
-        x, info = spla.cg(A, B[:, c], rtol=1e-6, maxiter=500, M=M)
-        if info != 0:
-            ok = False
-            break
-        V[:, c] = x
+    try:
+        diag = A.diagonal()
+        M = spla.LinearOperator(A.shape, matvec=lambda x: x / diag, dtype=np.float64)
+        for c in range(3):
+            try:
+                x, info = spla.cg(A, B[:, c], rtol=1e-6, maxiter=500, M=M)
+            except TypeError:           # SciPy < 1.12 calls the tolerance `tol`
+                x, info = spla.cg(A, B[:, c], tol=1e-6, maxiter=500, M=M)
+            if info != 0:
+                ok = False
+                break
+            V[:, c] = x
+    except Exception:
+        ok = False
     if not ok:
         V = spla.splu(A.tocsc()).solve(B)
     lattice = np.empty((L, L, L, 3))

@@ -64,8 +64,10 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
 
     # Sanitize inputs: display-referred [0,1], no NaN/Inf (e.g. a 32-bit float TIFF
     # can carry NaN). Keeps every downstream path — classical, SegFormer, CanonCGT — safe.
-    src_enc = np.nan_to_num(np.clip(np.asarray(src_enc, dtype=np.float64), 0.0, 1.0))
-    tgt_enc = np.nan_to_num(np.clip(np.asarray(tgt_enc, dtype=np.float64), 0.0, 1.0))
+    # (one working copy per side: clip copies, nan_to_num then works in place -
+    # a 7-frame pooled stack is 350 MB per copy)
+    src_enc = np.nan_to_num(np.clip(np.asarray(src_enc, dtype=np.float64), 0.0, 1.0), copy=False)
+    tgt_enc = np.nan_to_num(np.clip(np.asarray(tgt_enc, dtype=np.float64), 0.0, 1.0), copy=False)
 
     # "AI cinematic grade" mode: use the CanonCGT learned reference grade directly,
     # instead of the accuracy contest. This is a photorealistic *look* transfer, not a
@@ -495,11 +497,17 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
             res.alts[name] = luts[name].astype(np.float32)
 
     if corresponded and src_enc.shape == tgt_enc.shape:
-        de_b = image_delta_e00(src_enc, tgt_enc, tf)
-        de_a = image_delta_e00(apply_lut(src_enc, res.lut), tgt_enc, tf)
+        # The before/after accuracy report on an evenly strided 1M-pixel subset:
+        # CIEDE2000 over a whole 7-frame stack (14.5M pixels) took ~15 s and
+        # 7 GB of RAM for four summary numbers that 1M pixels pin to 0.01.
+        k = max(1, int(np.ceil(S_enc.shape[0] / 1_000_000)))
+        S_x, T_x = S_enc[::k], T_enc[::k]
+        de_b = delta_e00(cs.encoded_to_lab(S_x, tf), cs.encoded_to_lab(T_x, tf))
+        de_a = delta_e00(cs.encoded_to_lab(apply_lut_points(res.lut, S_x), tf),
+                         cs.encoded_to_lab(T_x, tf))
         res.de_before = summarize(de_b)
         res.de_after = summarize(de_a)
-        sm = skin_mask(S_enc)
+        sm = skin_mask(S_x)
         if sm.sum() > 50:
             res.de_skin_before = float(de_b[sm].mean())
             res.de_skin_after = float(de_a[sm].mean())

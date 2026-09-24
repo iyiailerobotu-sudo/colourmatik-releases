@@ -1,5 +1,5 @@
 {
-  "version": "1.7.8",
+  "version": "1.7.9",
   "url": "https://github.com/burskozbekov/colourMatik/releases/latest/download/colourMatik-Setup.exe",
-  "notes": "colourMatik 1.7.8 — the same match, about twice as fast. Nothing changed in what the engine decides (verified on the same 26 real-footage pairs as 1.7.7): the time went to the profiler. Match & Apply on the playhead frame 7.5 s -> 3.0 s, Match All (7 pooled frames) 13.4 s -> 4.6 s, the instant draft 3.6 s -> 1.7 s. The .cube LUT was formatted node by node and written four times per match; pooled frames were converted to linear light in full to sample 2% of them; frames went through temporary PNGs; the lattice solve, LUT application, distribution distance and IDT transport all got faster implementations that give the same numbers. Previews are now 150 KB instead of 4.4 MB."
+  "notes": "colourMatik 1.7.9 — a deep error check found four problems and fixed them. (1) Grades could vanish from older projects: the effect's LUT files were deleted after the newest 200, and a clip whose file is gone renders ungraded with no warning. Retention now keeps every file a saved project can still point at and only removes superseded drafts and slider steps. (2) Match All on 4K footage used up to 13 GB of RAM - frames are now matched at 1920 px (same look, measured): 3.3 GB and up to 40% faster. (3) Same-scene matches computed their accuracy report over 14.5M pixels: 14.9 s / 8.7 GB -> 5.4 s / 3.3 GB. (4) The LUT solver needed SciPy 1.12+ while the requirements allowed older - it now works on any version."
 }

@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -217,16 +218,143 @@ def _next_slot() -> int:
             _SLOT_COUNTER.write_text(str(n))
         except Exception:
             pass
-        # Garbage-collect: each .cube is ~7 MB and they accumulated forever. Keep a
-        # generous 200 newest (any look an open project could realistically still
-        # reference this season) and drop the rest.
+        global _SLOT_GC_LAST
+        if time.time() - _SLOT_GC_LAST > 600:          # at most every 10 minutes
+            _SLOT_GC_LAST = time.time()
+            try:
+                _gc_slots()
+            except Exception:
+                pass
+        return n
+
+
+# ---- slot retention -----------------------------------------------------------
+# A saved Premiere / After Effects project points at slot NUMBERS, and the native
+# effect renders identity when slot_<n>.cube is gone - silently, with no error.
+# The old rule "keep the newest 200 files" therefore wiped the grades of every
+# older project after ~200 applies (a busy day: each Match writes a draft and a
+# final, every slider pause and alternative-look click one more). Retention now
+# follows what can still be referenced:
+#   * every match (rid) keeps its first slot (the result itself) and its last
+#     two (the final state, and the one before it for a Premiere undo);
+#   * a draft is dropped once a later final was written for the same clip (the
+#     panel always replaces it; a crashed refine keeps it);
+#   * other intermediate states (earlier slider / alternative steps) are dropped
+#     after 14 days, long after any undo history is gone;
+#   * possibly-live slots, and slots written before this index existed, are never
+#     touched for 180 days; after that only if the folder exceeds 8 GB, oldest first.
+# The effect LUT stays 65^3: measured on real footage, 33^3 / 49^3 slots moved
+# some pictures by dE00 4-8 at the 99.9th percentile.
+_SLOT_INDEX = _SLOT_DIR / "slots.jsonl"
+_SLOT_GRACE_S = 14 * 86400
+_SLOT_KEEP_S = 180 * 86400
+_SLOT_BUDGET = 8 * 1024 ** 3
+_SLOT_GC_LAST = 0.0
+
+
+def _read_slot_index() -> list:
+    try:
+        lines = _SLOT_INDEX.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    out = []
+    for ln in lines:
         try:
-            cubes = sorted(_SLOT_DIR.glob("slot_*.cube"), key=lambda p: p.stat().st_mtime)
-            for p in cubes[:-200]:
-                p.unlink(missing_ok=True)
+            e = json.loads(ln)
+            e["slot"] = int(e["slot"])
+            out.append(e)
+        except Exception:
+            continue
+    return out
+
+
+def _record_slot(slot: int, rid: str, job: dict) -> None:
+    """Append one line per written slot: which match it belongs to, whether it is
+    a draft, and which source clip it grades."""
+    entry = {"slot": int(slot), "rid": rid, "draft": bool(job.get("draft")),
+             "src": str(job.get("src") or ""), "t": time.time()}
+    with _LOCK:
+        try:
+            _SLOT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(_SLOT_INDEX, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception:
             pass
-        return n
+
+
+def _gc_slots(now: float | None = None) -> dict:
+    """Delete only slot files no saved project can still be using (see above).
+    Caller holds _LOCK. Returns counts for tests / diagnostics."""
+    now = time.time() if now is None else now
+    files = {}
+    for p in _SLOT_DIR.glob("slot_*.cube"):
+        try:
+            n = int(p.stem.split("_", 1)[1])
+            st = p.stat()
+        except Exception:
+            continue
+        files[n] = (p, st.st_mtime, st.st_size)
+    stats = {"files": len(files), "superseded": 0, "deleted": 0, "budget_deleted": 0}
+    if not files:
+        return stats
+    raw = _read_slot_index()
+    entries = {}
+    for e in raw:
+        if e["slot"] in files:
+            entries[e["slot"]] = e                     # the latest record for a number wins
+    by_rid: dict = {}
+    newest_final_for_src: dict = {}
+    for n, e in entries.items():
+        t = float(e.get("t", files[n][1]))
+        by_rid.setdefault(e.get("rid"), []).append((t, n))
+        if not e.get("draft") and e.get("src"):
+            newest_final_for_src[e["src"]] = max(newest_final_for_src.get(e["src"], 0.0), t)
+    superseded = set()
+    for rid, lst in by_rid.items():
+        lst.sort()
+        keep = {lst[0][1]} | {n for _, n in lst[-2:]}
+        for t, n in lst:
+            e = entries[n]
+            if e.get("draft"):
+                if newest_final_for_src.get(e.get("src"), 0.0) > t:
+                    superseded.add(n)
+            elif n not in keep:
+                superseded.add(n)
+    stats["superseded"] = len(superseded)
+    for n in superseded:
+        p, mtime, size = files[n]
+        if now - mtime > _SLOT_GRACE_S:
+            try:
+                p.unlink()
+                files.pop(n, None)
+                stats["deleted"] += 1
+            except Exception:
+                pass
+    total = sum(v[2] for v in files.values())
+    if total > _SLOT_BUDGET:
+        for n in sorted(files, key=lambda k: files[k][1]):
+            if total <= _SLOT_BUDGET:
+                break
+            p, mtime, size = files[n]
+            if now - mtime <= _SLOT_KEEP_S:
+                break                                   # everything after this is younger
+            try:
+                p.unlink()
+                total -= size
+                files.pop(n, None)
+                stats["budget_deleted"] += 1
+            except Exception:
+                pass
+    # keep the index proportional to what still exists
+    if len(raw) > 2 * len(files) + 500:
+        try:
+            keep_lines = [json.dumps(e, ensure_ascii=False) for e in raw if e["slot"] in files]
+            tmp = _SLOT_INDEX.with_name(_SLOT_INDEX.name + ".tmp")
+            tmp.write_text("\n".join(keep_lines) + ("\n" if keep_lines else ""), encoding="utf-8")
+            os.replace(tmp, _SLOT_INDEX)
+        except Exception:
+            pass
+    return stats
 
 
 _METHOD_LABELS = {
@@ -278,10 +406,10 @@ def index() -> str:
 def _frame_is_degenerate(img: np.ndarray) -> bool:
     """True for a frame with (almost) no colour information to match: near-black
     or near-white over most of the picture, or essentially flat."""
-    a = np.asarray(img, dtype=np.float32)
+    a = np.asarray(img)
     if a.ndim != 3 or a.shape[0] * a.shape[1] < 64:
         return False
-    small = a[::max(1, a.shape[0] // 180), ::max(1, a.shape[1] // 320)]
+    small = a[::max(1, a.shape[0] // 180), ::max(1, a.shape[1] // 320)].astype(np.float32)
     luma = 0.2126 * small[..., 0] + 0.7152 * small[..., 1] + 0.0722 * small[..., 2]
     if float(np.mean(luma < 0.04)) > 0.85 or float(np.mean(luma > 0.96)) > 0.85:
         return True
@@ -415,7 +543,8 @@ def _process(src_path: Path, ref_path: Path, mode: str, tf: str, frames: int,
                           "src1": _small(src1), "ref1": _small(ref1),
                           "corresponded": corresponded, "alts": res.alts,
                           "scores": res.scores, "method": res.method,
-                          "s_lin": res.sample_src_lin, "t_lin": res.sample_tgt_lin})
+                          "s_lin": res.sample_src_lin, "t_lin": res.sample_tgt_lin,
+                          "draft": bool(fast), "src": str(src_path)})
     _log_match({"rid": rid, "target": str(src_path), "reference": str(ref_path),
                 "mode": mode, "tf": tf, "frames": f, "fast": bool(fast),
                 "src_at": src_at, "ref_at": ref_at,
@@ -695,6 +824,7 @@ def effect_lut(req: EffectLutReq):
         slot = _next_slot()
         path = _SLOT_DIR / f"slot_{slot}.cube"
         write_cube(path, lut_fx, title=f"colourMatik slot {slot}")
+        _record_slot(slot, req.rid, j)
         return {"ok": True, "slot": slot, "path": str(path)}
     except Exception as e:
         traceback.print_exc()

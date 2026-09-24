@@ -295,6 +295,104 @@ def test_robustness():
           res.corresponded is False, f"(chose {res.method})")
 
 
+
+
+def test_slot_retention():
+    """A saved project points at slot numbers and the effect renders identity when
+    the file is gone - so garbage collection may only remove what no project can
+    still reference."""
+    print("\n=== 7. Effect slot retention ===")
+    import json, os, tempfile, time
+    from colourmatik import webapp as W
+    d = Path(tempfile.mkdtemp())
+    old_dir, old_idx, old_budget = W._SLOT_DIR, W._SLOT_INDEX, W._SLOT_BUDGET
+    W._SLOT_DIR, W._SLOT_INDEX = d, d / "slots.jsonl"
+    try:
+        now = time.time()
+        day = 86400.0
+        def mk(n, age_days, rid=None, draft=False, src="", t_off=0.0, size=1000):
+            f = d / f"slot_{n}.cube"
+            f.write_bytes(b"x" * size)
+            t = now - age_days * day + t_off
+            os.utime(f, (t, t))
+            if rid is not None:
+                with open(W._SLOT_INDEX, "a") as fh:
+                    fh.write(json.dumps({"slot": n, "rid": rid, "draft": draft, "src": src, "t": t}) + "\n")
+        # match A on clip X: result 1, slider steps 2..5 (all 30 days old)
+        for i, n in enumerate([1, 2, 3, 4, 5]):
+            mk(n, 30, rid="A", src="/clip/X.mp4", t_off=i)
+        mk(6, 30, rid="DX", draft=True, src="/clip/X.mp4", t_off=-10)   # draft replaced by A
+        mk(7, 30, rid="DY", draft=True, src="/clip/Y.mp4")              # draft, refine crashed
+        mk(8, 30)                                                       # pre-index legacy slot
+        mk(9, 2, rid="B", src="/clip/Z.mp4")                            # recent match B...
+        mk(10, 2, rid="B", src="/clip/Z.mp4", t_off=1)
+        mk(11, 2, rid="B", src="/clip/Z.mp4", t_off=2)
+        mk(12, 2, rid="B", src="/clip/Z.mp4", t_off=3)                  # ...10 is superseded but young
+        st = W._gc_slots(now=now)
+        left = sorted(int(p.stem.split("_")[1]) for p in d.glob("slot_*.cube"))
+        check("keeps each match's result and its last two states", {1, 4, 5} <= set(left), f"(left {left})")
+        check("drops old intermediate slider steps", 2 not in left and 3 not in left, f"(left {left})")
+        check("drops a draft once its final exists", 6 not in left, f"(left {left})")
+        check("keeps a draft whose refine never finished", 7 in left, f"(left {left})")
+        check("keeps pre-index (legacy) slots", 8 in left, f"(left {left})")
+        check("keeps young superseded slots (undo window)", {9, 10, 11, 12} <= set(left), f"(left {left})")
+        # disk budget: only slots older than the keep window may go
+        W._SLOT_BUDGET = 2500
+        mk(20, 400, size=3000)
+        W._gc_slots(now=now)
+        left = sorted(int(p.stem.split("_")[1]) for p in d.glob("slot_*.cube"))
+        check("over budget: a >180-day-old slot is removed", 20 not in left, f"(left {left})")
+        check("over budget: younger live slots are never removed", {1, 4, 5, 7, 8} <= set(left), f"(left {left})")
+        empty = Path(tempfile.mkdtemp())
+        W._SLOT_DIR, W._SLOT_INDEX = empty, empty / "slots.jsonl"
+        check("empty slot folder is fine", W._gc_slots(now=now)["files"] == 0)
+    finally:
+        W._SLOT_DIR, W._SLOT_INDEX, W._SLOT_BUDGET = old_dir, old_idx, old_budget
+
+
+def test_frame_cap_and_solver():
+    """4K/6K frames are area-downscaled to 1920 px for matching (memory), HD is
+    untouched bit for bit; the lattice solver works on any SciPy version."""
+    print("\n=== 8. Frame size cap + solver fallback ===")
+    import subprocess, tempfile
+    from colourmatik import io as cmio
+    d = Path(tempfile.mkdtemp())
+    ff = cmio._ffmpeg_exe()
+    for name, size in (("uhd.mp4", "3840x2160"), ("hd.mp4", "1920x1080"), ("vert.mp4", "2160x3840")):
+        subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                        f"testsrc2=size={size}:rate=25:duration=1", "-pix_fmt", "yuv420p",
+                        str(d / name)], check=True)
+    a = cmio.extract_frame(d / "uhd.mp4", 0.5)
+    check("UHD frame capped to 1920x1080", a.shape == (1080, 1920, 3), f"(got {a.shape})")
+    v = cmio.extract_frame(d / "vert.mp4", 0.5)
+    check("vertical UHD capped to 1080x1920", v.shape == (1920, 1080, 3), f"(got {v.shape})")
+    h1 = cmio.extract_frame(d / "hd.mp4", 0.5)
+    h2 = cmio.extract_frame(d / "hd.mp4", 0.5, max_side=None)
+    check("HD frame untouched (bit-identical)", h1.shape == (1080, 1920, 3) and float(np.abs(h1 - h2).max()) == 0.0)
+    full = cmio.extract_frame(d / "uhd.mp4", 0.5, max_side=None)
+    diff = abs(float(full.mean()) - float(a.mean()))
+    check("area downscale keeps the picture's average", diff < 2e-3, f"(|mean diff| {diff:.5f})")
+    pooled = cmio.load_any(d / "uhd.mp4", frames=7)
+    check("pooled UHD stack is 7 capped frames", pooled.shape[1] == 1920 and pooled.shape[0] % 1080 == 0,
+          f"(got {pooled.shape})")
+    # SciPy < 1.12 has no cg(rtol=...): the lattice fit must still work
+    import scipy.sparse.linalg as spla
+    real_cg = spla.cg
+    def old_cg(A, b, x0=None, *, tol=1e-5, maxiter=None, M=None, **kw):
+        if "rtol" in kw:
+            raise TypeError("cg() got an unexpected keyword argument 'rtol'")
+        return real_cg(A, b, x0=x0, rtol=tol, maxiter=maxiter, M=M)
+    rng = np.random.default_rng(1)
+    src = rng.random((20000, 3)); tgt = np.clip(src * 0.9 + 0.05, 0, 1)
+    want = tf_mod.fit_lut_lattice(src, tgt, L=17)
+    spla.cg = old_cg
+    try:
+        got = tf_mod.fit_lut_lattice(src, tgt, L=17)
+    finally:
+        spla.cg = real_cg
+    check("lattice fit works with the pre-1.12 SciPy API", float(np.abs(got - want).max()) < 1e-6)
+
+
 if __name__ == "__main__":
     test_accuracy()
     test_distribution()
@@ -303,6 +401,8 @@ if __name__ == "__main__":
     test_identity()
     test_decode_plan()
     test_robustness()
+    test_slot_retention()
+    test_frame_cap_and_solver()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")

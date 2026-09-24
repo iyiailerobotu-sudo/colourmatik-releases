@@ -38,6 +38,33 @@ def _ffmpeg_exe() -> str:
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 VIDEO_EXTS = {".mov", ".mp4", ".mxf", ".m4v", ".avi", ".mkv", ".mts", ".braw"}
 
+# Frames only ever feed colour STATISTICS (300k sampled pixels), the preview
+# (960 px) and thumbnails - never a full-resolution output. Decoding 4K/6K frames
+# at native size cost up to 11.6 GB of RAM for a 7-frame pooled match (11
+# candidate frames held as float64) and would swap or crash an 8-16 GB machine.
+# Area-averaged down to 1920 px on the long side; HD and smaller are untouched.
+MAX_SIDE = 1920
+
+
+def _cap_size(arr: np.ndarray, max_side: int | None = MAX_SIDE) -> np.ndarray:
+    """Area-downscale an (H,W,3) frame so its long side is <= max_side (no-op otherwise)."""
+    if not max_side or arr.ndim != 3:
+        return arr
+    h, w = arr.shape[:2]
+    if max(h, w) <= max_side:
+        return arr
+    k = max_side / float(max(h, w))
+    nw, nh = max(1, int(round(w * k))), max(1, int(round(h * k)))
+    try:
+        import cv2
+        return cv2.resize(np.ascontiguousarray(arr), (nw, nh), interpolation=cv2.INTER_AREA)
+    except Exception:
+        # no OpenCV: integer-step block mean (still bounded memory)
+        f = int(np.ceil(max(h, w) / float(max_side)))
+        hh, ww = (h // f) * f, (w // f) * f
+        a = arr[:hh, :ww].reshape(hh // f, f, ww // f, f, 3).astype(np.float64).mean(axis=(1, 3))
+        return a.astype(arr.dtype) if np.issubdtype(arr.dtype, np.floating) else np.round(a).astype(arr.dtype)
+
 
 def load_image(path: str | Path) -> np.ndarray:
     """Load an image as display-encoded float RGB in [0,1], shape (H,W,3)."""
@@ -276,8 +303,10 @@ def _keep_dominant(frames: list, n: int) -> list:
     return [frames[i] for i in keep]
 
 
-def extract_frame(video: str | Path, t: float | None = None) -> np.ndarray:
-    """Extract one representative frame (default: middle) as encoded float RGB."""
+def extract_frame(video: str | Path, t: float | None = None,
+                  max_side: int | None = MAX_SIDE) -> np.ndarray:
+    """Extract one representative frame (default: middle) as encoded float RGB,
+    area-downscaled to max_side on the long side (None = native size)."""
     dur = _probe_duration(video)
     if t is None:
         t = (dur / 2.0) if dur else 0.5
@@ -301,7 +330,7 @@ def extract_frame(video: str | Path, t: float | None = None) -> np.ndarray:
     try:
         r = subprocess.run(base + vf + pix + ["-f", "image2pipe", "-vcodec", "ppm", "-"],
                            capture_output=True, check=True)
-        img = _parse_ppm(r.stdout)
+        img = _parse_ppm(r.stdout, max_side=max_side)
         if img is not None:
             return _hdr_to_sdr(img, hdr_trc) if hdr_trc else img
     except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
@@ -327,12 +356,14 @@ def extract_frame(video: str | Path, t: float | None = None) -> np.ndarray:
                 f"Couldn't read a frame from '{Path(video).name}' at {t:.2f}s "
                 f"(is the requested time past the end of the clip?)."
             )
-        img = load_image(out)
+        img = _cap_size(load_image(out), max_side)
         return _hdr_to_sdr(img, hdr_trc) if hdr_trc else img
 
 
-def _parse_ppm(data: bytes) -> np.ndarray | None:
-    """Binary PPM (P6, 8- or 16-bit) -> float RGB [0,1] (H,W,3); None if not a PPM."""
+def _parse_ppm(data: bytes, max_side: int | None = None) -> np.ndarray | None:
+    """Binary PPM (P6, 8- or 16-bit) -> float RGB [0,1] (H,W,3); None if not a PPM.
+    With max_side, the frame is area-downscaled while still 8/16-bit integers
+    (a 4K frame never exists as float64)."""
     if not data.startswith(b"P6"):
         return None
     pos = 2
@@ -359,16 +390,16 @@ def _parse_ppm(data: bytes) -> np.ndarray | None:
         if len(data) - pos < n_val:
             return None
         arr = np.frombuffer(data, dtype=np.uint8, count=n_val, offset=pos).reshape(h, w, 3)
-        return arr.astype(np.float64) / float(maxval)
+        return _cap_size(arr, max_side).astype(np.float64) / float(maxval)
     if len(data) - pos < n_val * 2:
         return None
-    arr = np.frombuffer(data, dtype=">u2", count=n_val, offset=pos).reshape(h, w, 3)
-    return arr.astype(np.float64) / float(maxval)
+    arr = np.frombuffer(data, dtype=">u2", count=n_val, offset=pos).reshape(h, w, 3).astype(np.uint16)
+    return _cap_size(arr, max_side).astype(np.float64) / float(maxval)
 
 
 def extract_frames(video: str | Path, n: int = 3,
                    start: float | None = None, end: float | None = None,
-                   robust: bool = True) -> np.ndarray:
+                   robust: bool = True, max_side: int | None = MAX_SIDE) -> np.ndarray:
     """Extract `n` frames spread across the clip and stack them vertically.
 
     Pooling several frames gives a more representative colour distribution than a
@@ -388,12 +419,12 @@ def extract_frames(video: str | Path, n: int = 3,
             hi = max(lo + 1e-3, min(float(end), dur))
     if n <= 1:
         mid = ((lo + hi) / 2.0) if hi is not None else None
-        return extract_frame(video, mid)
+        return extract_frame(video, mid, max_side=max_side)
     if not dur:
         # duration unknown -> can't spread samples; replicate the one frame so the
         # contract "n>1 returns n stacked frames" holds for every caller that
         # slices the stack back apart (e.g. the preview reuses stack[:H/n]).
-        f0 = extract_frame(video)
+        f0 = extract_frame(video, max_side=max_side)
         return np.concatenate([f0] * n, axis=0)
     # sample at interior points of the range, avoiding the very first/last frame
     span = hi - lo
@@ -406,7 +437,8 @@ def extract_frames(video: str | Path, n: int = 3,
     # two clips are already decoded in parallel one level up)
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=min(3, len(times))) as ex:
-        frames = list(ex.map(lambda tt: _strip_black_bars(extract_frame(video, tt)), times))
+        frames = list(ex.map(lambda tt: _strip_black_bars(extract_frame(video, tt, max_side=max_side)),
+                             times))
     if m > n:
         frames = _keep_dominant(frames, n)
     h = min(f.shape[0] for f in frames)
@@ -417,7 +449,7 @@ def extract_frames(video: str | Path, n: int = 3,
 
 def load_any(path: str | Path, t: float | None = None, frames: int = 1,
              start: float | None = None, end: float | None = None,
-             robust: bool = True) -> np.ndarray:
+             robust: bool = True, max_side: int | None = MAX_SIDE) -> np.ndarray:
     """Load an image, or extract frame(s) from a video, into encoded float RGB.
 
     Routed by CAPABILITY, not by extension allowlist: only known still-image
@@ -428,10 +460,11 @@ def load_any(path: str | Path, t: float | None = None, frames: int = 1,
     (say a .heic) still has a chance.
     """
     if Path(path).suffix.lower() in IMAGE_EXTS:
-        return load_image(path)
+        return _cap_size(load_image(path), max_side)
     try:
         if t is not None:
-            return extract_frame(path, t)
-        return extract_frames(path, frames, start=start, end=end, robust=robust)
+            return extract_frame(path, t, max_side=max_side)
+        return extract_frames(path, frames, start=start, end=end, robust=robust,
+                              max_side=max_side)
     except Exception:
-        return load_image(path)
+        return _cap_size(load_image(path), max_side)

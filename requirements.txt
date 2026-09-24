@@ -2,7 +2,7 @@
 # Local AI (Cinematic AI / CanonCGT + SegFormer) deps live in requirements-ai.txt.
 # One-shot setup for everything:  ./setup.sh
 numpy>=2,<3
-scipy>=1.11
+scipy>=1.12
 opencv-python-headless>=4.8
 colour-science>=0.4.4
 POT>=0.9
