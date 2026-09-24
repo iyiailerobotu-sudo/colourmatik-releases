@@ -133,7 +133,9 @@ fi
 # to Write Files and Access Network" preference. A running script can't flip it
 # (security), so we write it straight into each AE version's prefs — identical to
 # ticking the checkbox. AE must be closed (it is during a normal install).
-for PF in "$HOME/Library/Preferences/Adobe/After Effects/"*/"Adobe After Effects "*" Prefs.txt"; do
+# "After Effects" holds the numbered releases; the Beta keeps its own tree
+# ("After Effects (Beta)/27.0") and was silently left out.
+for PF in "$HOME/Library/Preferences/Adobe/After Effects"*/*/"Adobe After Effects "*" Prefs.txt"; do
     [ -f "$PF" ] || continue
     if grep -q '"Pref_SCRIPTING_FILE_NETWORK_SECURITY" = "0"' "$PF" 2>/dev/null; then
         sed -i '' 's/"Pref_SCRIPTING_FILE_NETWORK_SECURITY" = "0"/"Pref_SCRIPTING_FILE_NETWORK_SECURITY" = "1"/' "$PF"
@@ -147,7 +149,7 @@ echo "Restart Premiere Pro / After Effects, then find it under Effects ▸ colou
 # this preference is on. The Windows installer already flips it; without it the
 # AE panel cannot render frames for precomps, solids, text or shape layers and
 # reports a confusing "cannot create colourMatik/aeframes".
-for pref in "$HOME/Library/Preferences/Adobe/After Effects"/*/ ; do
+for pref in "$HOME/Library/Preferences/Adobe/After Effects"*/*/ ; do
   [ -d "$pref" ] || continue
   f="$pref/Adobe After Effects $(basename "$pref") Prefs-indep-general.txt"
   [ -f "$f" ] || continue
