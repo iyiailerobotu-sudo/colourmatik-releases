@@ -8,7 +8,7 @@ const uxp = require("uxp");
 
 const SERVER = "http://127.0.0.1:8765";
 const DEFAULT_INTENSITY = 100;   // 100 = the exact computed match; slider dials 0–200 live
-const LOCAL_VERSION = "1.7.9";
+const LOCAL_VERSION = "1.8.0";
 
 /* fetch with a hard timeout — a wedged engine must never freeze the panel */
 async function fetchT(url, opts, ms) {
@@ -851,7 +851,7 @@ async function runSelfUpdate(fromVersion) {
           _chamPlace(1);
           $("run-label").textContent = "UPDATED";
           el.textContent = "Updated to v" + vj.version;
-          setStatus("UPDATED", "colourMatik is now v" + vj.version + ". Restart Premiere Pro to load the new panel.", "done");
+          setStatus("UPDATED", "colourMatik is now v" + vj.version + " — the new engine is already running. Restart Premiere Pro to load the new panel.", "done");
           return;
         }
       } catch (e) {}
@@ -917,8 +917,11 @@ async function checkForUpdates() {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
     if (j.version && semverGt(j.version, local)) {
-      el.textContent = "Update v" + j.version + " — install";
-      updateReady = true;
+      // One click: a newer version found by this click is installed right
+      // away. It used to stop at "Update vX — install" and wait for a SECOND
+      // click, which read as "the update button does nothing".
+      el.textContent = "Update v" + j.version + " found — installing";
+      runSelfUpdate(local);
     } else {
       el.textContent = "Up to date";
     }

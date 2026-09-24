@@ -13,7 +13,7 @@ try {
   cs.evalScript('$.evalFile("' + _jsxPath + '")');
 } catch (e) {}
 var SERVER_HOST = "127.0.0.1", SERVER_PORT = 8765;
-var LOCAL_VERSION = "1.7.9";
+var LOCAL_VERSION = "1.8.0";
 var UPDATE_URL = "https://raw.githubusercontent.com/burskozbekov/colourMatik/main/version.json";
 var SITE_URL = "https://catheadai.com";
 var DEFAULT_INTENSITY = 100;
@@ -495,7 +495,8 @@ async function runSelfUpdate(fromVersion) {
           _chamPlace(1);
           $("run-label").textContent = "UPDATED";
           el.textContent = "Updated to v" + vj.version;
-          setStatus("UPDATED", "colourMatik is now v" + vj.version + ". Restart After Effects to load the new panel.", "done");
+          if (!_reloadIntoNewPanel(vj.version))
+            setStatus("UPDATED", "colourMatik is now v" + vj.version + " — the new engine is already running. Restart After Effects to load the new panel.", "done");
           return;
         }
       } catch (e) {}
@@ -550,11 +551,32 @@ function checkForUpdates() {
     }
     return _installedVersion().then(function (local) {
       return doFetch().then(function (j) {
-        if (j && j.version && semverGt(j.version, local)) { el.textContent = "Update v" + j.version + " — install"; updateReady = true; }
+        if (j && j.version && semverGt(j.version, local)) {
+          // One click: install right away (it used to wait for a second click).
+          el.textContent = "Update v" + j.version + " found — installing";
+          runSelfUpdate(local);
+        }
         else el.textContent = "Up to date";
       });
     });
   }).catch(function () { el.textContent = "Check failed"; });
+}
+/* After an update the NEW panel files are already on disk (the updater copies
+ * them before it restarts the engine) and this panel re-evaluates host.jsx on
+ * every load - so a page reload IS the restart. Only reload once the on-disk
+ * panel really carries the new version; otherwise ask for an AE restart. */
+function _reloadIntoNewPanel(newVersion) {
+  try {
+    var fs = _req ? _req("fs") : null;
+    var ext = cs.getSystemPath(SystemPath.EXTENSION).replace(/\\/g, "/");
+    var js = fs ? fs.readFileSync(ext + "/client/main.js", "utf8") : "";
+    if (js.indexOf('LOCAL_VERSION = "' + newVersion + '"') >= 0) {
+      setStatus("UPDATED", "colourMatik is now v" + newVersion + " — reloading the panel…", "done");
+      setTimeout(function () { window.location.reload(); }, 1500);
+      return true;
+    }
+  } catch (e) {}
+  return false;
 }
 function getJSONAbs(url) {
   return new Promise(function (resolve, reject) {

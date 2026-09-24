@@ -35,6 +35,13 @@ DESTDIR="$(dirname "$DEST")"
 # nothing. ditto merges the bundle's CONTENTS into the destination, so the
 # layout is right whether or not the folder could be removed; the result is
 # checked before it is called installed.
+# The effect binaries change rarely; most updates only touch the engine. An
+# identical installed bundle needs nothing - and no admin rights - so the
+# panel's one-click update stays silent instead of reporting "needs admin".
+bundle_current() {   # bundle_current <src.plugin> <dest.plugin>
+    [ -d "$2/Contents/MacOS" ] && diff -rq "$1" "$2" >/dev/null 2>&1
+}
+
 install_bundle() {   # install_bundle <src.plugin> <dest.plugin>
     local src="$1" dest="$2"
     $SUDO rm -rf "$dest" 2>/dev/null || true
@@ -55,22 +62,26 @@ install_bundle() {   # install_bundle <src.plugin> <dest.plugin>
 
 # Prefer no-sudo; fall back to sudo if the shared MediaCore folder needs admin.
 SUDO=""
-if ! mkdir -p "$DESTDIR" 2>/dev/null || [ ! -w "$DESTDIR" ]; then
-    echo "The Adobe plug-ins folder needs admin rights — you'll be asked for your Mac password."
-    if [ "$CAN_SUDO" = "1" ]; then SUDO="sudo"; else
-      echo "  (skipping: needs admin and no password prompt is possible here)"
-      SUDO=""; CM_SKIPPED="yes"
+if bundle_current "$SRC" "$DEST"; then
+    echo "Effect (Premiere) already current → $DEST"
+else
+    if ! mkdir -p "$DESTDIR" 2>/dev/null || [ ! -w "$DESTDIR" ]; then
+        echo "The Adobe plug-ins folder needs admin rights — you'll be asked for your Mac password."
+        if [ "$CAN_SUDO" = "1" ]; then SUDO="sudo"; else
+          echo "  (skipping: needs admin and no password prompt is possible here)"
+          SUDO=""; CM_SKIPPED="yes"
+        fi
+        $SUDO mkdir -p "$DESTDIR"
     fi
-    $SUDO mkdir -p "$DESTDIR"
+    install_bundle "$SRC" "$DEST" || CM_SKIPPED="yes"
+    $SUDO xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+    # Only adhoc-sign as a fallback if the copy has no valid signature at all (e.g. a
+    # locally hand-built plugin). A shipped Developer-ID/notarized build is left untouched.
+    if ! codesign --verify "$DEST" >/dev/null 2>&1; then
+        $SUDO codesign --force --sign - --timestamp=none "$DEST" >/dev/null 2>&1 || true
+    fi
+    echo "Installed (Premiere) → $DEST"
 fi
-install_bundle "$SRC" "$DEST" || CM_SKIPPED="yes"
-$SUDO xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
-# Only adhoc-sign as a fallback if the copy has no valid signature at all (e.g. a
-# locally hand-built plugin). A shipped Developer-ID/notarized build is left untouched.
-if ! codesign --verify "$DEST" >/dev/null 2>&1; then
-    $SUDO codesign --force --sign - --timestamp=none "$DEST" >/dev/null 2>&1 || true
-fi
-echo "Installed (Premiere) → $DEST"
 
 # After Effects does NOT load effects from the shared MediaCore folder — only from
 # its OWN Plug-Ins folder. Install a copy there too, for every AE version present,
@@ -80,6 +91,10 @@ for AEAPP in /Applications/Adobe\ After\ Effects\ *; do
     AEPLUG="$AEAPP/Plug-Ins"
     [ -d "$AEPLUG" ] || continue
     AEDEST="$AEPLUG/colourMatik/colourMatik.plugin"
+    if bundle_current "$AESRC" "$AEDEST"; then
+        echo "Effect (After Effects) already current → $AEDEST"
+        continue
+    fi
     if [ ! -w "$AEPLUG" ] && [ -z "$SUDO" ]; then
         echo "After Effects plug-ins folder needs admin — you may be asked for your password."
         if [ "$CAN_SUDO" = "1" ]; then SUDO="sudo"; else
