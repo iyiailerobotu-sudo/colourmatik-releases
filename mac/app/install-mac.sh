@@ -47,7 +47,11 @@ echo "Downloading colourMatik…"
 SRC="$(asuser /usr/bin/mktemp -d "/tmp/colourMatik-src.XXXXXX")"
 asuser /usr/bin/curl -fsSL "https://github.com/iyiailerobotu-sudo/colourmatik-releases/archive/refs/heads/main.zip" -o "$SRC/main.zip" || fail "download failed"
 asuser /usr/bin/ditto -x -k "$SRC/main.zip" "$SRC" || fail "unzip failed"
-INNER="$(/bin/ls -d "$SRC"/colourMatik-* 2>/dev/null | /usr/bin/head -1)"
+# GitHub names the archive's top folder "<repo>-<branch>": colourmatik-releases-main
+# since the move to the new repo. Bash globs are case-SENSITIVE even on a
+# case-insensitive disk, so the old "colourMatik-*" pattern matched nothing and
+# every install stopped at "extract failed". Take the one folder the zip holds.
+INNER="$(/bin/ls -d "$SRC"/*/ 2>/dev/null | /usr/bin/head -1)"; INNER="${INNER%/}"
 [ -z "$INNER" ] && fail "extract failed"
 echo "source: $INNER"
 

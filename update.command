@@ -27,7 +27,9 @@ else
   TMP="$(mktemp -d /tmp/colourMatik-upd.XXXXXX)"
   curl -fsSL "https://github.com/iyiailerobotu-sudo/colourmatik-releases/archive/refs/heads/main.zip" -o "$TMP/main.zip" || fail "download failed - check your internet connection"
   ditto -x -k "$TMP/main.zip" "$TMP" || fail "could not unpack the download"
-  INNER="$(ls -d "$TMP"/colourMatik-* 2>/dev/null | head -1)"
+  # The zip's top folder is "<repo>-main" (colourmatik-releases-main since the
+  # move) and bash globs are case-sensitive: take the one folder it holds.
+  INNER="$(ls -d "$TMP"/*/ 2>/dev/null | head -1)"; INNER="${INNER%/}"
   [ -z "$INNER" ] && { echo "Unexpected zip layout."; exit 1; }
   ditto "$INNER" "$DIR"
   rm -rf "$TMP"

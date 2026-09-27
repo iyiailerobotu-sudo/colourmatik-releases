@@ -1,14 +1,20 @@
-# Build the one-click Windows installer colourMatik-Setup.exe (NSIS) on a Windows
-# runner (NSIS is reliable there) and attach it to a release.
+# Build the one-click Windows installer colourMatik-windows-setup.exe (NSIS) on a
+# Windows runner (NSIS is reliable there) and attach it to a release.
+# Downloads live on fixed tags: attach to "windows-latest" (the site's link) and
+# to the versioned copy "win-vX.Y.Z".
 name: windows-setup
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to attach colourMatik-Setup.exe to (e.g. v1.2.0)"
+        description: "Release tag to attach colourMatik-windows-setup.exe to (e.g. windows-latest or win-v1.8.1)"
         required: false
         default: ""
+  # main only: path filters are NOT applied to tag pushes, so creating each
+  # release (windows-latest, win-v*, darwin-latest, mac-v*) used to start a
+  # needless Windows build of its own.
   push:
+    branches: [main]
     paths:
       - "windows/setup/**"
       - ".github/workflows/windows-setup.yml"
@@ -33,17 +39,17 @@ jobs:
           # ensure the icon is next to the script
           Copy-Item ../../assets/icons/colourMatik.ico ./colourMatik.ico -Force
           & "C:\Program Files (x86)\NSIS\makensis.exe" colourMatik.nsi
-          if (-not (Test-Path colourMatik-Setup.exe)) { throw "Setup.exe not produced" }
-          Write-Host "Built colourMatik-Setup.exe ($((Get-Item colourMatik-Setup.exe).Length) bytes)"
+          if (-not (Test-Path colourMatik-windows-setup.exe)) { throw "colourMatik-windows-setup.exe not produced" }
+          Write-Host "Built colourMatik-windows-setup.exe ($((Get-Item colourMatik-windows-setup.exe).Length) bytes)"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: colourMatik-Setup
-          path: windows/setup/colourMatik-Setup.exe
+          name: colourMatik-windows-setup
+          path: windows/setup/colourMatik-windows-setup.exe
 
       - name: Attach to release
         if: ${{ inputs.release_tag != '' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.release_tag }}" windows/setup/colourMatik-Setup.exe --clobber
+        run: gh release upload "${{ inputs.release_tag }}" windows/setup/colourMatik-windows-setup.exe --clobber

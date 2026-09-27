@@ -17,7 +17,9 @@ VIAddVersionKey "FileVersion" "1.8.1"
 VIAddVersionKey "CompanyName" "catheadai"
 VIAddVersionKey "FileDescription" "colourMatik Setup"
 VIAddVersionKey "LegalCopyright" "Sevki Bugra Ozbek"
-OutFile "colourMatik-Setup.exe"
+; Same name as the fixed download (release tag windows-latest), so what the
+; build produces is exactly what gets uploaded - no renaming step to forget.
+OutFile "colourMatik-windows-setup.exe"
 InstallDir "$LOCALAPPDATA\colourMatik"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma

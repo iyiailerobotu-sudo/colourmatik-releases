@@ -37,7 +37,8 @@ $PB -c "Add :LSMinimumSystemVersion string 11.0" "$IP" 2>/dev/null || true
 $PB -c "Add :NSHumanReadableCopyright string colourMatik — catheadai.com" "$IP" 2>/dev/null || true
 
 mkdir -p "$ROOT/dist"
-ZIP="$ROOT/dist/colourMatik-Installer-Mac.zip"
+# Same name as the fixed download (release tag darwin-latest) - upload as is.
+ZIP="$ROOT/dist/colourMatik-mac.zip"
 
 if [ "$MODE" = "sign" ]; then
   echo "==> Signing (Developer ID Application, hardened runtime + timestamp)"
