@@ -10,6 +10,11 @@
 # It is run as root (the app asks for the admin password once), then drops to the
 # logged-in user for all user-owned steps via `asuser`.
 set -u
+# Where this script (and payload.zip next to it) lives, then leave that folder:
+# it can be a privacy-protected one (Downloads, Desktop) that the processes this
+# script starts for the user cannot even read ("getcwd: Operation not permitted").
+HERE="$(cd "$(dirname "$0")" && pwd)"
+cd / 2>/dev/null || true
 LOG="/tmp/colourMatik-install.log"
 PROGRESS="/tmp/colourMatik-progress"
 exec > >(tee -a "$LOG") 2>&1
@@ -47,10 +52,18 @@ fail()   { echo "FAIL: $1"; prog FAIL 0 "$1"; notify "Install failed — $1"; ex
 #    this script inside the app: Contents/Resources/payload.zip -> colourMatik/
 prog 5 10 "Unpacking colourMatik…"
 echo "Unpacking colourMatik…"
-PAYLOAD="$(cd "$(dirname "$0")" && pwd)/payload.zip"
+PAYLOAD="$HERE/payload.zip"
 [ -f "$PAYLOAD" ] || fail "this installer is incomplete (no payload.zip) — download it again"
 SRC="$(asuser /usr/bin/mktemp -d "/tmp/colourMatik-src.XXXXXX")"
-asuser /usr/bin/ditto -x -k "$PAYLOAD" "$SRC" || fail "unzip failed"
+# Copy it out as root first: a process started for the user via launchctl asuser
+# is refused by macOS privacy protection when the installer app sits in
+# Downloads / Desktop / Documents without App Translocation (moved there by the
+# user, or downloaded without quarantine), so unzipping straight from the app
+# would stop at "unzip failed". Root reads it the same way it reads this script.
+/bin/cp "$PAYLOAD" "$SRC/payload.zip" && /usr/sbin/chown "$CONSOLE_USER" "$SRC/payload.zip" \
+  || fail "could not read the program inside the installer — move colourMatik Installer to Applications and open it again"
+asuser /usr/bin/ditto -x -k "$SRC/payload.zip" "$SRC" || fail "unzip failed"
+/bin/rm -f "$SRC/payload.zip"
 INNER="$SRC/colourMatik"
 [ -f "$INNER/version.json" ] || fail "extract failed"
 echo "source: $INNER ($(/usr/bin/grep -o '"version": *"[^"]*"' "$INNER/version.json"))"
