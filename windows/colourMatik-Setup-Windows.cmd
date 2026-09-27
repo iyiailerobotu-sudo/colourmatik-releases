@@ -15,7 +15,7 @@ echo   +----------------------------------------------+
 echo.
 
 set "DEST=%TEMP%\colourMatik-Setup.exe"
-set "URL=https://github.com/burskozbekov/colourMatik/releases/latest/download/colourMatik-Setup.exe"
+set "URL=https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/windows-latest/colourMatik-windows-setup.exe"
 
 rem Download the NSIS installer and launch it. Setup.exe carries a
 rem requireAdministrator manifest, so Windows shows its own UAC prompt and the
@@ -36,8 +36,8 @@ if errorlevel 1 (
   echo.
   echo   Couldn't fetch the installer. Check your internet connection and try
   echo   again, or download it directly from:
-  echo     github.com/burskozbekov/colourMatik/releases/latest
-  echo   ^(file: colourMatik-Setup.exe^)
+  echo     github.com/iyiailerobotu-sudo/colourmatik-releases/releases
+  echo   ^(file: colourMatik-windows-setup.exe^)
   echo.
   pause
   exit /b 1

@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $DestDir = "C:\Program Files\Adobe\Common\Plug-ins\7.0\MediaCore"
 $Dest = Join-Path $DestDir "colourMatik.aex"
-$ReleaseAsset = "https://github.com/burskozbekov/colourMatik/releases/latest/download/colourMatik-effect-windows.zip"
+$ReleaseAsset = "https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/windows-latest/colourMatik-effect-windows.zip"
 
 $local = @("$Root\windows\colourMatik.aex", "$Root\colourmatik-fx\colourMatik.aex") |
          Where-Object { Test-Path $_ } | Select-Object -First 1

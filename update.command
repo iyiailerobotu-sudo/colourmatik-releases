@@ -25,7 +25,7 @@ else
   # .venv / vendor / slot files are untouched; setup.sh below refreshes deps.
   echo "==> Downloading the latest colourMatik (zip)..."
   TMP="$(mktemp -d /tmp/colourMatik-upd.XXXXXX)"
-  curl -fsSL "https://github.com/burskozbekov/colourMatik/archive/refs/heads/main.zip" -o "$TMP/main.zip" || fail "download failed - check your internet connection"
+  curl -fsSL "https://github.com/iyiailerobotu-sudo/colourmatik-releases/archive/refs/heads/main.zip" -o "$TMP/main.zip" || fail "download failed - check your internet connection"
   ditto -x -k "$TMP/main.zip" "$TMP" || fail "could not unpack the download"
   INNER="$(ls -d "$TMP"/colourMatik-* 2>/dev/null | head -1)"
   [ -z "$INNER" ] && { echo "Unexpected zip layout."; exit 1; }

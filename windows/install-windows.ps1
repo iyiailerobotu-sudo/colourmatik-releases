@@ -5,7 +5,7 @@
 # by Sevki Bugra Ozbek - catheadai.com
 param([string]$Phase = "all")
 $ErrorActionPreference = "Stop"
-$Repo = "https://github.com/burskozbekov/colourMatik.git"
+$Repo = "https://github.com/iyiailerobotu-sudo/colourmatik-releases.git"
 
 if ($Phase -eq "all") {
     Write-Host ""

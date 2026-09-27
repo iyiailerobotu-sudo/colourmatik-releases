@@ -10,10 +10,10 @@ Name "colourMatik"
 ; NSIS default (1.0.0) and macOS showed a frozen 1.2.0, so a user who checked
 ; the DOWNLOADED FILE concluded the site was still serving an ancient build —
 ; even though it installs the current one.
-VIProductVersion "1.6.6.0"
+VIProductVersion "1.8.1.0"
 VIAddVersionKey "ProductName" "colourMatik"
-VIAddVersionKey "ProductVersion" "1.6.6"
-VIAddVersionKey "FileVersion" "1.6.6"
+VIAddVersionKey "ProductVersion" "1.8.1"
+VIAddVersionKey "FileVersion" "1.8.1"
 VIAddVersionKey "CompanyName" "catheadai"
 VIAddVersionKey "FileDescription" "colourMatik Setup"
 VIAddVersionKey "LegalCopyright" "Sevki Bugra Ozbek"
@@ -53,7 +53,7 @@ Section "colourMatik"
   FileOpen $0 "$TEMP\colourMatik-setup\dl.ps1" w
   FileWrite $0 "$$ErrorActionPreference='Stop'$\r$\n"
   FileWrite $0 "$$z=Join-Path $$env:TEMP 'colourmatik-src.zip'$\r$\n"
-  FileWrite $0 "Invoke-WebRequest 'https://github.com/burskozbekov/colourMatik/archive/refs/heads/main.zip' -OutFile $$z -UseBasicParsing$\r$\n"
+  FileWrite $0 "Invoke-WebRequest 'https://github.com/iyiailerobotu-sudo/colourmatik-releases/archive/refs/heads/main.zip' -OutFile $$z -UseBasicParsing$\r$\n"
   FileWrite $0 "$$d=Join-Path $$env:TEMP 'colourmatik-src'$\r$\n"
   FileWrite $0 "if(Test-Path $$d){Remove-Item -Recurse -Force $$d}$\r$\n"
   FileWrite $0 "Expand-Archive $$z $$d$\r$\n"
@@ -99,7 +99,7 @@ Section "colourMatik"
   DetailPrint "      the AI download is a few GB (10-20 minutes). The log below keeps streaming."
   !insertmacro RunPhase "engine"
   StrCmp $1 "0" +2 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The engine/AI download didn't finish (code $1). The Premiere panel and effect ARE installed. Re-run Setup on a stable connection to finish the engine.$\r$\nManual: github.com/burskozbekov/colourMatik"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "The engine/AI download didn't finish (code $1). The Premiere panel and effect ARE installed. Re-run Setup on a stable connection to finish the engine.$\r$\nManual: github.com/iyiailerobotu-sudo/colourmatik-releases"
 
   ; --- stage 7: engine autostart -------------------------------------------------
   DetailPrint "[97%] Starting the engine + enabling autostart..."

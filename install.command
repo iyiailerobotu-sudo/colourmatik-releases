@@ -23,7 +23,7 @@ BANNER
 [ "$(uname)" = "Darwin" ] || die "This installer is for macOS only."
 [ "$(uname -m)" = "arm64" ] || warn "This Mac is Intel; the native effect is Apple-Silicon only (the rest still works)."
 
-REPO="https://github.com/burskozbekov/colourMatik.git"
+REPO="https://github.com/iyiailerobotu-sudo/colourmatik-releases.git"
 SELF="$(cd "$(dirname "$0")" && pwd)"
 
 # 1) Apple Command Line Tools (git needs it)

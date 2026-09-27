@@ -1,5 +1,5 @@
 {
-  "version": "1.8.0",
-  "url": "https://github.com/burskozbekov/colourMatik/releases/latest/download/colourMatik-Setup.exe",
-  "notes": "colourMatik 1.8.0 — Update is one click. Pressing 'Check for updates' in the Premiere or After Effects panel used to only CHECK: it showed 'Update vX — install' and waited for a second click, which read as 'the update button does nothing'. Now the same click installs it, with the progress bar in the panel. After Effects then reloads its own panel into the new version (no AE restart); Premiere runs the new engine immediately and asks for a restart only to load the new panel UI. The macOS updater also skips effect files that are already current, so a routine update never needs admin rights."
+  "version": "1.8.1",
+  "url": "https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/windows-latest/colourMatik-windows-setup.exe",
+  "notes": "colourMatik 1.8.1 — new download home. colourMatik now lives at github.com/iyiailerobotu-sudo/colourmatik-releases: the installers, the one-click updater and the update check all use it. Otherwise identical to 1.8.0 (one-click updates)."
 }

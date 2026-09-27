@@ -8,7 +8,7 @@ const uxp = require("uxp");
 
 const SERVER = "http://127.0.0.1:8765";
 const DEFAULT_INTENSITY = 100;   // 100 = the exact computed match; slider dials 0–200 live
-const LOCAL_VERSION = "1.8.0";
+const LOCAL_VERSION = "1.8.1";
 
 /* fetch with a hard timeout — a wedged engine must never freeze the panel */
 async function fetchT(url, opts, ms) {
@@ -19,7 +19,7 @@ async function fetchT(url, opts, ms) {
 }
 // Update checks read version.json straight from the GitHub repo (always hosted,
 // CORS-friendly). Bump version.json + this constant together on each release.
-const UPDATE_URL = "https://raw.githubusercontent.com/burskozbekov/colourMatik/main/version.json";
+const UPDATE_URL = "https://raw.githubusercontent.com/iyiailerobotu-sudo/colourmatik-releases/main/version.json";
 const SITE_URL = "https://catheadai.com";
 
 const $ = (id) => document.getElementById(id);

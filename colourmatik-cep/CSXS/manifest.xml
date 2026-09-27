@@ -2,11 +2,11 @@
 <ExtensionManifest
     Version="11.0"
     ExtensionBundleId="com.catheadai.colourmatik"
-    ExtensionBundleVersion="1.8.0"
+    ExtensionBundleVersion="1.8.1"
     ExtensionBundleName="colourMatik"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ExtensionList>
-    <Extension Id="com.catheadai.colourmatik.panel" Version="1.8.0" />
+    <Extension Id="com.catheadai.colourmatik.panel" Version="1.8.1" />
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>

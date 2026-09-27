@@ -45,7 +45,7 @@ fail()   { echo "FAIL: $1"; prog FAIL 0 "$1"; notify "Install failed — $1"; ex
 prog 5 10 "Downloading colourMatik…"
 echo "Downloading colourMatik…"
 SRC="$(asuser /usr/bin/mktemp -d "/tmp/colourMatik-src.XXXXXX")"
-asuser /usr/bin/curl -fsSL "https://github.com/burskozbekov/colourMatik/archive/refs/heads/main.zip" -o "$SRC/main.zip" || fail "download failed"
+asuser /usr/bin/curl -fsSL "https://github.com/iyiailerobotu-sudo/colourmatik-releases/archive/refs/heads/main.zip" -o "$SRC/main.zip" || fail "download failed"
 asuser /usr/bin/ditto -x -k "$SRC/main.zip" "$SRC" || fail "unzip failed"
 INNER="$(/bin/ls -d "$SRC"/colourMatik-* 2>/dev/null | /usr/bin/head -1)"
 [ -z "$INNER" ] && fail "extract failed"

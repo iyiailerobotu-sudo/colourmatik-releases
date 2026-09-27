@@ -1,6 +1,6 @@
 # colourMatik - one-paste diagnostic + repair (Windows).
 #   Win+R -> powershell -> paste:
-#   irm https://raw.githubusercontent.com/burskozbekov/colourMatik/main/windows/diag.ps1 | iex
+#   irm https://raw.githubusercontent.com/iyiailerobotu-sudo/colourmatik-releases/main/windows/diag.ps1 | iex
 # Prints where every copy of the panel lives and what version it is, removes
 # stale ones, installs the current panel, and leaves a report on the Desktop.
 # ASCII-only on purpose: PowerShell 5.1 mangles non-ASCII piped through iex.
