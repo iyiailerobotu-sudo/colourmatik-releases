@@ -15,9 +15,14 @@ on:
         description: "Direct-download URL of the Adobe After Effects SDK (Windows) zip"
         required: true
       release_tag:
-        description: "Optional: existing release tag to attach colourMatik-effect-windows.zip to (e.g. v1.1.0)"
+        description: "Optional: existing release tag to attach colourMatik-effect-windows.zip to (e.g. windows-latest or win-v1.8.1)"
         required: false
         default: ""
+
+# The attach step writes to a release. New repositories default the workflow
+# token to read-only, so without this the upload fails with 403.
+permissions:
+  contents: write
 
 jobs:
   build:
