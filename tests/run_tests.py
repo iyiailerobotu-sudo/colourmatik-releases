@@ -540,6 +540,156 @@ def test_github_policy():
               on is not None and set(triggers) <= {"workflow_dispatch", "push"} and push_ok, f"(triggers {triggers})")
 
 
+def test_windows_update_log():
+    """The Windows updater logs every step - the PowerShell ones too - to
+    update.log with no window, in the engine-started and the self-elevated
+    run; the engine it restarts inherits none of its variables; and an older
+    updater still running update-windows.cmd IN PLACE (its engine had inherited
+    CMK_RELAUNCHED=1) resumes inside the landing strip, not mid-line."""
+    print("\n=== 11. Windows updater: every step logs; old updaters land safely ===")
+    import os, re, shutil, subprocess, tempfile, time, uuid
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "windows" / "update-windows.cmd").read_bytes().replace(b"\r\n", b"\n")
+    # Where an in-place 1.8.1 / 1.8.2 updater resumes reading once its download
+    # has replaced the file. 1.8.2 installs (CRLF from the Setup, LF from the
+    # 1.8.1 main.zip migration) get the new file from the Setup: CRLF. 1.8.1
+    # installs (LF or CRLF; zip or git path) get it from main.zip: LF.
+    resume = {b"\r\n": [1919, 1957, 1958], b"\n": [1916, 2033, 2076]}
+    fetch = b'powershell -NoProfile -ExecutionPolicy Bypass -File "%CMK_HOME%fetch-latest.ps1" -Dest "%CD%"'
+    form = {b"\r\n": "CRLF", b"\n": "LF"}
+    for eol, offsets in resume.items():
+        data = text.replace(b"\n", eol)
+        start = data.index(fetch) + len(fetch) + len(eol)
+        end = start
+        while re.match(rb":+" + re.escape(eol), data[end:]):
+            end = data.index(eol, end) + len(eol)
+        check(f"update-windows.cmd ({form[eol]}): every old in-place resume point is in the landing strip",
+              all(start <= o < end for o in offsets), f"(strip [{start}, {end}), resume points {offsets})")
+    check("the elevated copy is told /elevated and never asks for elevation again",
+          b"'/silent','/elevated' -Verb RunAs" in text and b'if errorlevel 1 if not "%~2"=="/elevated" (' in text)
+    if os.name != "nt":
+        print("  (the rest runs the real update-windows.cmd: Windows only)")
+        return
+
+    # Resuming at each of those points runs straight into the download check,
+    # the download's errorlevel intact.
+    tmp = Path(tempfile.mkdtemp(prefix="cmk-upd-test-"))
+    try:
+        (tmp / "wrap.cmd").write_bytes(b'@echo off\r\ncmd /c exit 7\r\ncall "%~dp0rest.cmd"\r\n')
+        for eol, offsets in resume.items():
+            data = text.replace(b"\n", eol)
+            stop = data.index(b"if errorlevel 1 (" + eol, data.index(fetch))
+            outs = set()
+            for o in offsets:
+                (tmp / "rest.cmd").write_bytes(data[o:stop] + b"echo LANDED %errorlevel%" + eol)
+                outs.add(subprocess.run(["cmd", "/c", str(tmp / "wrap.cmd")], capture_output=True,
+                                        text=True).stdout.strip())
+            check(f"{form[eol]}: an old updater resuming there reaches the download check, errorlevel intact",
+                  outs == {"LANDED 7"}, f"({sorted(outs)})")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # The real script in a sandbox install: stub steps that print to stdout and
+    # stderr and fail, a stub engine restart that records the CMK* variables it
+    # inherited. Never stops a real engine, never asks for admin (no UAC prompt
+    # in a test run), never writes the real %APPDATA%.
+    from colourmatik import webapp as W
+    sb = Path(tempfile.mkdtemp(prefix="cmk-upd-test-"))
+    win, data_dir = sb / "app" / "windows", sb / "appdata" / "colourMatik"
+    win.mkdir(parents=True); data_dir.mkdir(parents=True); (sb / "temp").mkdir()
+    script, kill, admin = text.replace(b"\n", b"\r\n"), b"'colourmatik.webapp'", b"net session >nul 2>&1"
+    sandboxable = script.count(kill) == 1 and script.count(admin) == 1
+    check("the test can sandbox update-windows.cmd (its engine kill and admin check are where it expects)", sandboxable)
+    if not sandboxable:             # never run it against the real engine, never prompt for admin
+        shutil.rmtree(sb, ignore_errors=True)
+        return
+    script = script.replace(kill, b"'" + uuid.uuid4().hex[:18].encode() + b"'")
+    (win / "update-windows.cmd").write_bytes(script.replace(admin, b"ver >nul"))
+    (win / "fetch-latest.ps1").write_text(
+        'param([string]$Dest)\nAdd-Type -Namespace W -Name K -MemberDefinition \'[DllImport("kernel32.dll")] public static extern '
+        'System.IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);\'\n'
+        '$w = [W.K]::GetConsoleWindow()\n"visible=" + ($w -ne [IntPtr]::Zero -and [W.K]::IsWindowVisible($w)) | '
+        'Out-File -Append -Encoding ascii (Join-Path $PSScriptRoot "..\\..\\window.txt")\n'
+        'Write-Host "==> Looking up the newest colourMatik release..."\n'
+        '[Console]::Error.WriteLine("stub fetch: stderr line")\n', encoding="utf-8")
+    (win / "setup.ps1").write_text('cmd /c echo stub setup: native child output\nWrite-Error "stub setup: an error"\n', encoding="utf-8")
+    (win / "install-panel.ps1").write_text('Write-Output "stub panel: installed"\n', encoding="utf-8")
+    (win / "install-effect.ps1").write_text('$ErrorActionPreference = "Stop"\nthrow "stub effect: access denied"\n', encoding="utf-8")
+    (win / "engine-hidden.vbs").write_text(
+        'Set sh = CreateObject("WScript.Shell")\nSet fso = CreateObject("Scripting.FileSystemObject")\ns = ""\n'
+        'For Each e In sh.Environment("Process")\n  If UCase(Left(e, 3)) = "CMK" Then s = s & e & ";"\nNext\n'
+        'Set f = fso.OpenTextFile(fso.GetParentFolderName(WScript.ScriptFullName) & "\\..\\..\\restart.txt", 8, True)\n'
+        'f.WriteLine "[" & s & "]"\nf.Close\n', encoding="utf-8")
+    prog, log = data_dir / "update_progress", data_dir / "update.log"
+
+    def finished(timeout=120):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                if prog.read_text().startswith(("100|", "FAIL|")):
+                    time.sleep(1.0)
+                    return True
+            except OSError:
+                pass
+            time.sleep(0.25)
+        return False
+
+    saved_env, saved_popen, saved_dir = dict(os.environ), subprocess.Popen, W._SLOT_DIR
+    launched = {}
+
+    def popen(args, **kw):          # the engine's own launch, pointed at the sandbox
+        launched.update(kw)
+        return saved_popen([args[0], args[1], str(win / "update-windows.cmd"), *args[3:]], **{**kw, "cwd": str(sb / "app")})
+    try:
+        for k in [k for k in os.environ if k.upper().startswith("CMK")]:
+            del os.environ[k]
+        os.environ.update({"APPDATA": str(sb / "appdata"), "TEMP": str(sb / "temp"), "TMP": str(sb / "temp")})
+        subprocess.Popen, W._SLOT_DIR = popen, data_dir
+        W.__dict__.pop("_UPDATE_STARTED_AT", None)
+        r = W.update_now()
+        subprocess.Popen = saved_popen
+        flags = launched.get("creationflags", 0)
+        check("engine: the updater gets a console with no window, not DETACHED_PROCESS",
+              r.get("started") and flags & 0x08000000 and not flags & 0x00000008, f"(flags {flags:#x})")
+        done = finished()
+        out = log.read_text(errors="replace") if log.exists() else ""
+        check("engine-started update: PowerShell steps' output and errors reach update.log",
+              done and all(s in out for s in ["==> Updating colourMatik...", "==> Looking up the newest colourMatik release...",
+                                              "stub fetch: stderr line", "stub setup: native child output", "stub setup: an error",
+                                              "stub panel: installed", "stub effect: access denied", "==> Updated."]),
+              f"(log: {out[-300:]!r})")
+        restarts = (sb / "restart.txt").read_text().split() if (sb / "restart.txt").exists() else []
+        windows = (sb / "window.txt").read_text().split() if (sb / "window.txt").exists() else []
+        check("engine-started update: no visible window; the restarted engine inherits no CMK* variable",
+              windows == ["visible=False"] and restarts == ["[]"], f"({windows}, {restarts})")
+
+        # The self-elevated copy - started the way the elevation request starts
+        # it, minus the prompt - has to write update.log itself, and waits while
+        # another process (the window that asked for admin) still holds it.
+        prog.write_text("2|Starting the update")
+        hold = open(log, "ab")
+        subprocess.run(["powershell", "-NoProfile", "-Command",
+                        "Start-Process -FilePath '%s' -ArgumentList '/silent','/elevated' -WindowStyle Hidden"
+                        % (win / "update-windows.cmd")], check=True)
+        time.sleep(2.0)
+        held = log.read_text(errors="replace")
+        hold.close()
+        done = finished()
+        out = log.read_text(errors="replace")[len(held):]
+        check("self-elevated update: waits for update.log, then logs every step there",
+              done and "==> Looking up the newest colourMatik release..." in out and "stub effect: access denied" in out
+              and "==> Updated." in out, f"(appended: {out[-300:]!r})")
+        restarts = (sb / "restart.txt").read_text().split() if (sb / "restart.txt").exists() else []
+        windows = (sb / "window.txt").read_text().split() if (sb / "window.txt").exists() else []
+        check("self-elevated update: hidden window; the restarted engine inherits no CMK* variable",
+              windows == ["visible=False"] * 2 and restarts == ["[]"] * 2, f"({windows}, {restarts})")
+    finally:
+        subprocess.Popen, W._SLOT_DIR = saved_popen, saved_dir
+        W.__dict__.pop("_UPDATE_STARTED_AT", None)
+        os.environ.clear(); os.environ.update(saved_env)
+        shutil.rmtree(sb, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_accuracy()
     test_distribution()
@@ -552,6 +702,7 @@ if __name__ == "__main__":
     test_frame_cap_and_solver()
     test_update_check()
     test_github_policy()
+    test_windows_update_log()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")

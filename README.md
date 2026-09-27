@@ -84,7 +84,7 @@ through the GitHub API), takes the program out of it and reinstalls. **Removing:
 
 **Updating:** the panel updates itself in one click (it checks at most once a day); by hand:
 `windows\update-windows.cmd` — it downloads the newest Setup (one file, through the GitHub API) and
-installs the program inside it. · **Removing:** `windows\uninstall-windows.cmd` ·
+installs the program inside it; every step logs to `%APPDATA%\colourMatik\update.log`. · **Removing:** `windows\uninstall-windows.cmd` ·
 **Engine console (debug):** `windows\colourmatik-app.cmd`
 
 *Building the installers:* Windows — `windows\setup\build-setup.ps1` (NSIS 3; packs the committed tree

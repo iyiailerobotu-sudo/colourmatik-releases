@@ -1214,9 +1214,9 @@ def update_now():
     """Launch the platform updater, detached — the panel's Update button.
 
     The updater pulls the newest code, refreshes deps, reinstalls panel+effect
-    and restarts this engine, so it must OUTLIVE this process: on Windows
-    `cmd start` detaches (and update-windows.cmd self-elevates with its own UAC
-    prompt); on macOS it opens in Terminal so the user can watch."""
+    and restarts this engine, so it must OUTLIVE this process: on Windows it
+    runs in its own windowless console (update-windows.cmd self-elevates with
+    its own UAC prompt); on macOS in its own session. Both log to update.log."""
     import subprocess, time
     root = Path(__file__).resolve().parents[1]
     # Single-flight: Premiere AND After Effects auto-update on open; two updaters
@@ -1247,11 +1247,18 @@ def update_now():
             # /silent: hidden elevated window, no pause — the PANEL is the UI.
             # Log on Windows too — every failure there used to vanish with the
             # hidden window, leaving nothing to diagnose.
+            # Never DETACHED_PROCESS: cmd then has no console, so every console
+            # program it starts (the PowerShell steps, pip) gets a new VISIBLE
+            # console as its output instead of the log — update.log only ever
+            # held cmd's own echo lines. CREATE_NO_WINDOW gives cmd a console
+            # with no window; the steps share it and inherit the log. The
+            # updater still outlives this engine: it is not tied to its parent's
+            # life, and killing the engine leaves the updater's console alone.
             with open(log, "ab") as lf:
                 subprocess.Popen(["cmd", "/c", str(upd), "/silent"], cwd=str(root),
                                  stdout=lf, stderr=lf, stdin=subprocess.DEVNULL,
-                                 creationflags=(0x00000008 | 0x00000200 | 0x08000000))
-            #                DETACHED | NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+                                 creationflags=(0x08000000 | 0x00000200))
+            #                CREATE_NO_WINDOW | NEW_PROCESS_GROUP
         else:
             upd = root / "update.command"
             if not upd.exists():
