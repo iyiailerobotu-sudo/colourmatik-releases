@@ -11,6 +11,7 @@ if errorlevel 1 if not "%~2"=="/elevated" (
   ) else (
     powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
   )
+  if errorlevel 1 goto :no_admin
   exit /b
 )
 rem Re-exec from a copy: the download overwrites this very file, and cmd.exe
@@ -22,7 +23,6 @@ if /i not "%~nx0"=="cmk-update-run.cmd" (
   exit /b
 )
 cd /d "%CMK_HOME%.."
-rem The panel shows a live bar by polling this file through the engine.
 set "CMKPROG=%APPDATA%\colourMatik\update_progress"
 set "CMKLOG=%APPDATA%\colourMatik\update.log"
 if not exist "%APPDATA%\colourMatik" mkdir "%APPDATA%\colourMatik" >nul 2>&1
@@ -54,7 +54,11 @@ rem tests/run_tests.py checks the offsets whenever the lines above change.
 rem
 rem Notes:
 rem - Self-elevation: without admin the panel and effect steps quietly fell
-rem   over and the machine looked like it "never got the update".
+rem   over and the machine looked like it "never got the update". A declined
+rem   admin prompt ends at :no_admin, at the bottom of this file.
+rem - update_progress (CMKPROG) is what the panel's bar polls, through the
+rem   engine: "pct|message" moves the bar, "FAIL|reason" stops it with that
+rem   reason.
 rem - The TEMP copy is chosen by file name, never by a variable: variables
 rem   leak into the engine this script restarts, and from there into that
 rem   engine's next update.
@@ -104,3 +108,14 @@ endlocal
 <nul set /p "=100|Done" > "%CMKPROG%" 2>nul
 echo ==^> Updated. Restart Premiere Pro.
 if not "%~1"=="/silent" pause
+exit /b
+
+:no_admin
+rem The admin prompt was declined (or could not be shown), so nothing ran. Tell
+rem the panel at once: its bar used to wait 15 minutes for an update that never
+rem started, then say "timed out". After a FAIL the engine lets the panel's
+rem retry start a new update. CMKPROG is not set this early, hence the path.
+if "%~1"=="/silent" <nul set /p "=FAIL|Windows admin approval was not given, so nothing was updated. Click retry and choose Yes." > "%APPDATA%\colourMatik\update_progress" 2>nul
+echo ==^> Windows admin approval was not given, so nothing was updated.
+if not "%~1"=="/silent" pause
+exit /b 1

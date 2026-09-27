@@ -1227,7 +1227,10 @@ def update_now():
         # Must outlive the update itself: a first run downloads multi-GB AI
         # wheels and routinely passes 20 minutes. A 10-minute window let a
         # second panel start a CONCURRENT pip into the same venv.
-        if time.time() - _UPDATE_STARTED_AT < 2400:
+        # Unless the updater reported FAIL: it has stopped (a declined admin
+        # prompt, a failed download), and "retry" used to get that same FAIL
+        # back for the rest of the window instead of a new update.
+        if time.time() - _UPDATE_STARTED_AT < 2400 and not update_progress().get("failed"):
             return {"ok": True, "started": True, "already": True, "from_version": __version__}
     except NameError:
         pass

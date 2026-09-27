@@ -543,10 +543,12 @@ def test_github_policy():
 def test_windows_update_log():
     """The Windows updater logs every step - the PowerShell ones too - to
     update.log with no window, in the engine-started and the self-elevated
-    run; the engine it restarts inherits none of its variables; and an older
-    updater still running update-windows.cmd IN PLACE (its engine had inherited
-    CMK_RELAUNCHED=1) resumes inside the landing strip, not mid-line."""
-    print("\n=== 11. Windows updater: every step logs; old updaters land safely ===")
+    run; the engine it restarts inherits none of its variables; a declined
+    admin prompt reaches the panel at once as FAIL|reason and "retry" starts a
+    new update; and an older updater still running update-windows.cmd IN PLACE
+    (its engine had inherited CMK_RELAUNCHED=1) resumes inside the landing
+    strip, not mid-line."""
+    print("\n=== 11. Windows updater: every step logs; a declined prompt fails fast; old updaters land safely ===")
     import os, re, shutil, subprocess, tempfile, time, uuid
     root = Path(__file__).resolve().parents[1]
     text = (root / "windows" / "update-windows.cmd").read_bytes().replace(b"\r\n", b"\n")
@@ -567,6 +569,8 @@ def test_windows_update_log():
               all(start <= o < end for o in offsets), f"(strip [{start}, {end}), resume points {offsets})")
     check("the elevated copy is told /elevated and never asks for elevation again",
           b"'/silent','/elevated' -Verb RunAs" in text and b'if errorlevel 1 if not "%~2"=="/elevated" (' in text)
+    check("a failed elevation request (a declined admin prompt) goes to :no_admin, never on to the update",
+          b"  if errorlevel 1 goto :no_admin\n  exit /b\n)\n" in text and b"\n:no_admin\n" in text)
     if os.name != "nt":
         print("  (the rest runs the real update-windows.cmd: Windows only)")
         return
@@ -622,11 +626,11 @@ def test_windows_update_log():
         'f.WriteLine "[" & s & "]"\nf.Close\n', encoding="utf-8")
     prog, log = data_dir / "update_progress", data_dir / "update.log"
 
-    def finished(timeout=120):
+    def finished(timeout=120, ends=("100|", "FAIL|")):
         t0 = time.time()
         while time.time() - t0 < timeout:
             try:
-                if prog.read_text().startswith(("100|", "FAIL|")):
+                if prog.read_text().startswith(ends):
                     time.sleep(1.0)
                     return True
             except OSError:
@@ -635,10 +639,11 @@ def test_windows_update_log():
         return False
 
     saved_env, saved_popen, saved_dir = dict(os.environ), subprocess.Popen, W._SLOT_DIR
-    launched = {}
+    launched, starts = {}, []
 
     def popen(args, **kw):          # the engine's own launch, pointed at the sandbox
         launched.update(kw)
+        starts.append(args)
         return saved_popen([args[0], args[1], str(win / "update-windows.cmd"), *args[3:]], **{**kw, "cwd": str(sb / "app")})
     try:
         for k in [k for k in os.environ if k.upper().startswith("CMK")]:
@@ -683,6 +688,59 @@ def test_windows_update_log():
         windows = (sb / "window.txt").read_text().split() if (sb / "window.txt").exists() else []
         check("self-elevated update: hidden window; the restarted engine inherits no CMK* variable",
               windows == ["visible=False"] * 2 and restarts == ["[]"] * 2, f"({windows}, {restarts})")
+
+        # The admin prompt, from the engine's launch on. The admin check fails
+        # and the real Start-Process gets another verb instead of RunAs, so a
+        # test run never shows a prompt: "open" succeeds like an approved
+        # prompt (its copy is not elevated; the stub steps don't mind), and an
+        # unknown verb fails just as a declined prompt does (same error, exit
+        # code 1). Declined, nothing may run and the panel must hear it at once
+        # (FAIL|reason) - its bar used to wait 15 minutes, then say "timed
+        # out". "retry" must then start a new update rather than get the old
+        # FAIL back, while a second panel still joins an update that is running.
+        runas = b"-Verb RunAs -WindowStyle Hidden"
+        check("the test can stand in for the admin prompt (its RunAs is where it expects)", script.count(runas) == 1)
+        if script.count(runas) == 1:
+            def click_update():             # the panel's Update button, launched into the sandbox
+                subprocess.Popen = popen
+                try:
+                    r = W.update_now()
+                finally:
+                    subprocess.Popen = saved_popen
+                return r if isinstance(r, dict) else {"error": bytes(r.body).decode(errors="replace")}
+
+            def through_prompt(verb, ends):
+                (win / "update-windows.cmd").write_bytes(
+                    script.replace(admin, b"cmd /c exit 1").replace(runas, b"-Verb " + verb + b" -WindowStyle Hidden"))
+                held = log.read_text(errors="replace")
+                W.__dict__.pop("_UPDATE_STARTED_AT", None)      # a fresh engine, as after an update
+                r, t0 = click_update(), time.time()
+                done = finished(ends=ends)
+                return r, done, time.time() - t0, log.read_text(errors="replace")[len(held):]
+
+            r, done, took, out = through_prompt(b"open", ("100|",))
+            check("approved admin prompt: no FAIL; the copy it starts runs the update to the end",
+                  r.get("started") and done and "admin approval was not given" not in out and "==> Updated." in out,
+                  f"({r}, log: {out[-200:]!r})")
+            steps = lambda: [(sb / f).read_bytes() if (sb / f).exists() else b"" for f in ("window.txt", "restart.txt")]
+            ran = steps()
+            r, done, took, out = through_prompt(b"cmkDeclined", ("FAIL|",))
+            p = W.update_progress()
+            check("declined admin prompt: the panel gets FAIL with the reason at once; no step ran",
+                  r.get("started") and done and p.get("failed") and "admin approval was not given" in p.get("msg", "")
+                  and steps() == ran, f"({p}, {took:.1f} s)")
+            check("declined admin prompt: update.log has PowerShell's error and the reason",
+                  "Start-Process" in out and "==> Windows admin approval was not given" in out, f"(log: {out[-300:]!r})")
+            n = len(starts)
+            retry = click_update()
+            again = finished(ends=("FAIL|",))
+            prog.write_text("25|Refreshing the engine")          # as if that new update were running now
+            joined = click_update()
+            check("after a FAIL, retry starts a new update; while one runs, a second panel joins it",
+                  retry.get("started") and not retry.get("already") and again and joined.get("already")
+                  and len(starts) == n + 1, f"({len(starts) - n} new updater(s); retry {retry}, then {joined})")
+            if len(starts) > n + 1:
+                finished()                                        # one started after all: let it end first
     finally:
         subprocess.Popen, W._SLOT_DIR = saved_popen, saved_dir
         W.__dict__.pop("_UPDATE_STARTED_AT", None)
