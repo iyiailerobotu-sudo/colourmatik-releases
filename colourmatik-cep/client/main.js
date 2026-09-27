@@ -13,8 +13,10 @@ try {
   cs.evalScript('$.evalFile("' + _jsxPath + '")');
 } catch (e) {}
 var SERVER_HOST = "127.0.0.1", SERVER_PORT = 8765;
-var LOCAL_VERSION = "1.8.1";
-var UPDATE_URL = "https://raw.githubusercontent.com/iyiailerobotu-sudo/colourmatik-releases/main/version.json";
+var LOCAL_VERSION = "1.8.2";
+// Update checks go through the local engine (GET /update_check), which asks
+// GitHub at most once a day for the whole machine - the panel never contacts
+// GitHub itself.
 var SITE_URL = "https://catheadai.com";
 var DEFAULT_INTENSITY = 100;
 
@@ -479,11 +481,15 @@ async function runSelfUpdate(fromVersion) {
     var pct = 0.02, msg = "Starting";
     while (Date.now() - t0 < 15 * 60 * 1000) {
       await _sleep(900);
+      var failed = null;
       try {
         var pj = await getJSON("/update_progress", 2500);
-        if (pj && pj.failed) throw new Error(pj.msg || "the updater reported a failure");
-        if (pj && typeof pj.pct === "number") { pct = Math.max(pct, pj.pct); if (pj.msg) msg = pj.msg; }
-      } catch (e) {}
+        if (pj && pj.failed) failed = pj.msg || "the updater reported a failure";
+        else if (pj && typeof pj.pct === "number") { pct = Math.max(pct, pj.pct); if (pj.msg) msg = pj.msg; }
+      } catch (e) {}                     // engine restarting - keep the bar alive
+      // Thrown inside the try above, a FAIL line was swallowed by that catch
+      // (it is only meant for engine restarts): the bar ran on to its timeout.
+      if (failed) { var fe = new Error(failed); fe.fromUpdater = true; throw fe; }
       _paintFill(pct);
       _chamPlace(pct);
       $("run-label").textContent = "UPDATING " + Math.round(pct * 100) + "%  ·  " + msg;
@@ -503,7 +509,8 @@ async function runSelfUpdate(fromVersion) {
     }
     throw new Error("timed out");
   } catch (e) {
-    setStatus("ERROR", "Update couldn't finish: " + (e.message || e) + ". It may still be running — check again in a minute.", "error");
+    setStatus("ERROR", "Update couldn't finish: " + (e.message || e) +
+      (e.fromUpdater ? "" : ". It may still be running — check again in a minute."), "error");
     el.textContent = "Update failed — retry";
     updateReady = true;
   } finally {
@@ -534,15 +541,19 @@ function _installedVersion() {
     return semverGt(eng, LOCAL_VERSION) ? LOCAL_VERSION : eng;
   }).catch(function () { return LOCAL_VERSION; });
 }
+/* newest release as the engine knows it - see the Premiere panel (force = the
+ * user's click) */
+function _latestRelease(force) {
+  return getJSON("/update_check" + (force ? "?force=1" : ""), 20000).then(function (j) {
+    if (!j || (!j.version && !j.ok)) throw new Error((j && j.error) || "no answer");
+    return j;
+  });
+}
 function checkForUpdates() {
   var el = $("update-link");
   if (_updating) return;
   if (updateReady) { _installedVersion().then(runSelfUpdate); return; }
   el.textContent = "Checking…";
-  var doFetch = function () {
-    if (typeof fetch === "function") return fetch(UPDATE_URL, { cache: "no-store" }).then(function (r) { return r.json(); });
-    return getJSONAbs(UPDATE_URL);
-  };
   _restartPending().then(function (pend) {
     if (pend) {
       el.textContent = "Restart After Effects";
@@ -550,7 +561,7 @@ function checkForUpdates() {
       return null;
     }
     return _installedVersion().then(function (local) {
-      return doFetch().then(function (j) {
+      return _latestRelease(true).then(function (j) {
         if (j && j.version && semverGt(j.version, local)) {
           // One click: install right away (it used to wait for a second click).
           el.textContent = "Update v" + j.version + " found — installing";
@@ -578,15 +589,6 @@ function _reloadIntoNewPanel(newVersion) {
   } catch (e) {}
   return false;
 }
-function getJSONAbs(url) {
-  return new Promise(function (resolve, reject) {
-    try {
-      var lib = _req(url.indexOf("https") === 0 ? "https" : "http");
-      lib.get(url, function (res) { var b = ""; res.on("data", function (d) { b += d; }); res.on("end", function () { try { resolve(JSON.parse(b)); } catch (e) { reject(e); } }); }).on("error", reject);
-    } catch (e) { reject(e); }
-  });
-}
-
 /* ---- wire up -------------------------------------------------------------- */
 $("refBtn").addEventListener("click", captureRef);
 $("srcBtn").addEventListener("click", captureSrc);
@@ -611,10 +613,10 @@ try {
 } catch (e) {}
 
 /* ---- AUTOMATIC updates ----------------------------------------------------
- * On every panel open: compare the shipped version.json against what is
- * actually installed (the engine's /version) and, if newer, START THE UPDATE
- * without any clicks. Runs once, at startup only, so it can never interrupt a
- * match in progress. */
+ * Once per panel open, as soon as the engine answers: compare the newest
+ * release (the engine's once-a-day check) against what is actually installed
+ * (the engine's /version) and, if newer, START THE UPDATE without any clicks.
+ * Runs at startup only, so it can never interrupt a match in progress. */
 function autoUpdateCheck() {
   _restartPending().then(function (pend) {
     if (pend) {
@@ -623,25 +625,22 @@ function autoUpdateCheck() {
       return null;
     }
     return _installedVersion().then(function (local) {
-    var doFetch = function () {
-      if (typeof fetch === "function") return fetch(UPDATE_URL, { cache: "no-store" }).then(function (r) { return r.json(); });
-      return getJSONAbs(UPDATE_URL);
-    };
-    return doFetch().then(function (j) {
-      if (!(j && j.version && semverGt(j.version, local))) return;
-      runSelfUpdate(local);   // fully automatic, fully in-panel
+      return _latestRelease(false).then(function (j) {
+        if (!(j && j.version && semverGt(j.version, local))) return;
+        runSelfUpdate(local);   // fully automatic, fully in-panel
       });
     });
   }).catch(function () {});
 }
-setTimeout(autoUpdateCheck, 1500);
 
 /* Engine takes ~30s to boot after login/install/update; do not open into a
- * scary error — poll and narrate, flip to READY when it answers. */
+ * scary error — poll and narrate, flip to READY when it answers, and only then
+ * run the once-per-open update check (it needs the engine). */
 (function engineWait(i) {
   getJSON("/version", 2500).then(function (j) {
     if (j && j.version) {
       if (i > 0) setStatus("READY", "Engine is up (v" + j.version + "). Pick a reference and a target.", "idle");
+      autoUpdateCheck();
       return;
     }
     throw new Error("no");

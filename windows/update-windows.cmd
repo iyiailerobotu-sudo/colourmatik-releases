@@ -29,18 +29,19 @@ set "CMKPROG=%APPDATA%\colourMatik\update_progress"
 if not exist "%APPDATA%\colourMatik" mkdir "%APPDATA%\colourMatik" >nul 2>&1
 <nul set /p "=5|Downloading the newest colourMatik" > "%CMKPROG%" 2>nul
 echo ==^> Updating colourMatik...
-rem Fetch the newest code. A Setup-made install is only a git checkout when git
-rem was on the machine; on every other PC there is no .git, so a bare "git pull"
-rem fetched NOTHING and the update then ran over the same old code - the bar
-rem filled and the version never moved. Fall back to the source zip, exactly
-rem like the macOS updater does. The download lives in its own .ps1 so no
-rem PowerShell parentheses are ever echoed inside a batch block.
-set "CMKGOT="
-if exist ".git" (
-  git pull --ff-only
-  if not errorlevel 1 set "CMKGOT=1"
+rem Fetch the newest version: fetch-latest.ps1 downloads the newest Windows Setup
+rem (one file, through the GitHub API) and unpacks its program over this folder.
+rem Never a git pull or a source zip, so every install updates the same way. It
+rem lives in its own .ps1 so no PowerShell parentheses are ever echoed inside a
+rem batch block. On failure stop HERE: running the steps below over the old
+rem code filled the bar while the version never moved.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%CMK_HOME%fetch-latest.ps1" -Dest "%CD%"
+if errorlevel 1 (
+  <nul set /p "=FAIL|Could not download the update - check the internet connection and try again" > "%CMKPROG%" 2>nul
+  echo ==^> Download failed.
+  if not "%~1"=="/silent" pause
+  exit /b 1
 )
-if not defined CMKGOT powershell -NoProfile -ExecutionPolicy Bypass -File "%CMK_HOME%fetch-latest.ps1" -Dest "%CD%"
 
 <nul set /p "=25|Refreshing the engine" > "%CMKPROG%" 2>nul
 echo ==^> Refreshing engine + AI...

@@ -12,3 +12,4 @@ imageio-ffmpeg>=0.4.9   # bundles a static ffmpeg -> no system ffmpeg needed
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
+certifi                 # CA certificates for the daily update check (python.org's macOS Python has none)

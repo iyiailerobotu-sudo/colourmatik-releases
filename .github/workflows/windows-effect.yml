@@ -15,7 +15,7 @@ on:
         description: "Direct-download URL of the Adobe After Effects SDK (Windows) zip"
         required: true
       release_tag:
-        description: "Optional: existing release tag to attach colourMatik-effect-windows.zip to (e.g. windows-latest or win-v1.8.1)"
+        description: "Optional: release tag to attach colourMatik-effect-windows.zip to. Normally leave empty: commit the built .aex files to colourmatik-fx/ (the Setup ships them); windows-latest carries only the Setup"
         required: false
         default: ""
 

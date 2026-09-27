@@ -1100,6 +1100,115 @@ def update_progress():
         return {"ok": True, "pct": 0.0, "msg": ""}
 
 
+# ── Update check ─────────────────────────────────────────────────────────────
+# The panels ask the ENGINE whether a newer colourMatik exists, and the engine
+# asks GitHub at most once a day for the whole machine - however many panels,
+# hosts and restarts - while a click on "Check for updates" may refresh it at
+# most every 10 minutes. A failed check counts too, so an offline machine does
+# not retry on every panel open. It reads the public releases list through the
+# REST API, names itself in the User-Agent (never a browser's) and asks
+# conditionally (If-None-Match), so an unchanged list costs a bodiless 304.
+# Newest = the highest win-vX.Y.Z / mac-vX.Y.Z tag: the versioned releases the
+# website reads, each published right after the fixed download it copies.
+_RELEASES_API = ("https://api.github.com/repos/iyiailerobotu-sudo/colourmatik-releases"
+                 "/releases?per_page=20")
+_UPDATE_CACHE = _SLOT_DIR / "update_check.json"
+_UPDATE_EVERY_AUTO = 24 * 3600
+_UPDATE_EVERY_MANUAL = 10 * 60
+_UPDATE_LOCK = threading.Lock()
+
+
+def _release_prefix() -> str:
+    return "win-v" if os.name == "nt" else "mac-v"
+
+
+def _newest_release(releases, prefix: str):
+    """The highest published <prefix>X.Y.Z release, or None."""
+    best = None
+    for r in releases if isinstance(releases, list) else []:
+        if not isinstance(r, dict) or r.get("draft") or r.get("prerelease"):
+            continue
+        tag = str(r.get("tag_name") or "")
+        if not tag.startswith(prefix):
+            continue
+        try:
+            key = tuple(int(x) for x in tag[len(prefix):].split("."))
+        except ValueError:
+            continue
+        if len(key) == 3 and (best is None or key > best[0]):
+            best = (key, r)
+    if best is None:
+        return None
+    key, r = best
+    return {"version": "%d.%d.%d" % key, "notes": str(r.get("body") or "")[:2000],
+            "url": str(r.get("html_url") or "")}
+
+
+def _fetch_releases(etag: str = ""):
+    """GET the releases list: (status, releases or None, etag); 304 -> None."""
+    import ssl
+    import urllib.error
+    import urllib.request
+    ctx = None
+    try:            # python.org's macOS Python ships without CA certificates
+        import certifi
+        ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+    hdr = {"Accept": "application/vnd.github+json",
+           "X-GitHub-Api-Version": "2022-11-28",
+           "User-Agent": "colourMatik-engine/%s (%s)" % (
+               __version__, "Windows" if os.name == "nt" else "macOS")}
+    if etag:
+        hdr["If-None-Match"] = etag
+    try:
+        with urllib.request.urlopen(urllib.request.Request(_RELEASES_API, headers=hdr),
+                                    timeout=10, context=ctx) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8")), resp.headers.get("ETag") or ""
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            return 304, None, etag
+        raise
+
+
+@app.get("/update_check")
+def update_check(force: int = 0):
+    """Newest released colourMatik for this platform ({version, notes, url}),
+    from the cache unless that is older than a day - or 10 minutes, when the
+    user clicked "Check for updates" (force=1)."""
+    prefix = _release_prefix()
+    now = time.time()
+    with _UPDATE_LOCK:
+        try:
+            cache = json.loads(_UPDATE_CACHE.read_text(encoding="utf-8"))
+            if not isinstance(cache, dict) or cache.get("prefix") != prefix:
+                cache = {}
+        except Exception:
+            cache = {}
+        age = now - float(cache.get("checked_at") or 0)
+        fresh = 0 <= age < (_UPDATE_EVERY_MANUAL if force else _UPDATE_EVERY_AUTO)
+        if not fresh:
+            latest, etag, err = cache.get("latest"), cache.get("etag") or "", None
+            try:
+                status, rel, etag = _fetch_releases(etag if latest else "")
+                if status != 304:
+                    latest = _newest_release(rel, prefix)
+            except Exception as e:
+                err = "%s: %s" % (type(e).__name__, e)
+            cache = {"prefix": prefix, "checked_at": now, "latest": latest,
+                     "etag": etag, "error": err}
+            try:
+                _SLOT_DIR.mkdir(parents=True, exist_ok=True)
+                _UPDATE_CACHE.write_text(json.dumps(cache), encoding="utf-8")
+            except Exception:
+                pass
+    latest = cache.get("latest") or {}
+    return {"ok": bool(latest) or not cache.get("error"),
+            "version": latest.get("version"), "notes": latest.get("notes", ""),
+            "url": latest.get("url", ""), "checked_at": cache.get("checked_at"),
+            "cached": fresh, "error": cache.get("error")}
+
+
 @app.post("/update_now")
 def update_now():
     """Launch the platform updater, detached — the panel's Update button.

@@ -1,23 +1,21 @@
 # Build the one-click Windows installer colourMatik-windows-setup.exe (NSIS) on a
-# Windows runner (NSIS is reliable there) and attach it to a release.
+# Windows runner, and optionally attach it to a release. The Setup carries the
+# whole program (windows/setup/build-setup.ps1 packs the committed tree), so
+# installing downloads nothing from GitHub.
 # Downloads live on fixed tags: attach to "windows-latest" (the site's link) and
 # to the versioned copy "win-vX.Y.Z".
+#
+# Run by hand only (Actions > windows-setup > Run workflow). It used to start on
+# every push to main that touched windows/setup - account protection: no
+# automatic or scheduled builds.
 name: windows-setup
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to attach colourMatik-windows-setup.exe to (e.g. windows-latest or win-v1.8.1)"
+        description: "Release tag to attach colourMatik-windows-setup.exe to (e.g. windows-latest or win-v1.8.2); empty = build only"
         required: false
         default: ""
-  # main only: path filters are NOT applied to tag pushes, so creating each
-  # release (windows-latest, win-v*, darwin-latest, mac-v*) used to start a
-  # needless Windows build of its own.
-  push:
-    branches: [main]
-    paths:
-      - "windows/setup/**"
-      - ".github/workflows/windows-setup.yml"
 
 # needed so the release-attach step can replace existing assets
 permissions:
@@ -34,13 +32,7 @@ jobs:
 
       - name: Build Setup.exe
         shell: pwsh
-        run: |
-          cd windows/setup
-          # ensure the icon is next to the script
-          Copy-Item ../../assets/icons/colourMatik.ico ./colourMatik.ico -Force
-          & "C:\Program Files (x86)\NSIS\makensis.exe" colourMatik.nsi
-          if (-not (Test-Path colourMatik-windows-setup.exe)) { throw "colourMatik-windows-setup.exe not produced" }
-          Write-Host "Built colourMatik-windows-setup.exe ($((Get-Item colourMatik-windows-setup.exe).Length) bytes)"
+        run: ./windows/setup/build-setup.ps1
 
       - uses: actions/upload-artifact@v4
         with:

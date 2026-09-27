@@ -1,9 +1,10 @@
 # colourMatik - one-paste diagnostic + repair (Windows).
-#   Win+R -> powershell -> paste:
-#   irm https://raw.githubusercontent.com/iyiailerobotu-sudo/colourmatik-releases/main/windows/diag.ps1 | iex
+#   It comes with the program - Win+R -> powershell -> paste:
+#   powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\colourMatik\windows\diag.ps1"
 # Prints where every copy of the panel lives and what version it is, removes
 # stale ones, installs the current panel, and leaves a report on the Desktop.
-# ASCII-only on purpose: PowerShell 5.1 mangles non-ASCII piped through iex.
+# ASCII-only on purpose: Windows PowerShell 5.1 reads a script without a BOM
+# as ANSI and mangles anything non-ASCII.
 
 $ErrorActionPreference = "Continue"
 $lines = New-Object System.Collections.Generic.List[string]

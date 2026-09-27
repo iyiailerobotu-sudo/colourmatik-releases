@@ -1,0 +1,8 @@
+# Left out of the program the installers carry (they pack `git archive HEAD`):
+# artwork, tests and CI are build-time only. See windows/setup/build-setup.ps1
+# and mac/app/build-app.sh. Nothing here changes how files are checked out.
+/assets export-ignore
+/chameleon-icon-source.png export-ignore
+/tests export-ignore
+/.github export-ignore
+/.gitattributes export-ignore

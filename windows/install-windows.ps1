@@ -1,11 +1,12 @@
 # colourMatik — one-click installer for Windows 10/11 (x64).
 # Run via install-windows.cmd (double-click) for the full install, or with
-# -Phase <name> to run one stage (used by colourMatik-Setup.exe so its progress
-# bar can advance stage by stage): prereqs | code | engine | panel | effect | autostart
+# -Phase <name> to run one stage (used by colourMatik-windows-setup.exe so its
+# progress bar can advance stage by stage): prereqs | code | engine | panel | effect | autostart
+# Installs the program from the folder it runs in (Setup unpacks itself there):
+# nothing is downloaded from GitHub.
 # by Sevki Bugra Ozbek - catheadai.com
 param([string]$Phase = "all")
 $ErrorActionPreference = "Stop"
-$Repo = "https://github.com/iyiailerobotu-sudo/colourmatik-releases.git"
 
 if ($Phase -eq "all") {
     Write-Host ""
@@ -36,8 +37,9 @@ function Phase-Prereqs {
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         throw "winget (App Installer) is required. Install 'App Installer' from the Microsoft Store, then re-run."
     }
-    Write-Host "==> Installing prerequisites (Python 3.11, git, ffmpeg)..."
-    foreach ($id in @("Python.Python.3.11", "Git.Git", "Gyan.FFmpeg")) {
+    # (no git: the program comes from Setup itself, and updates from the release)
+    Write-Host "==> Installing prerequisites (Python 3.11, ffmpeg)..."
+    foreach ($id in @("Python.Python.3.11", "Gyan.FFmpeg")) {
         winget install -e --id $id --accept-source-agreements --accept-package-agreements 2>$null | Out-Null
     }
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
@@ -45,38 +47,33 @@ function Phase-Prereqs {
 }
 
 function Phase-Code {
-    if ($InstallDir -eq $Root) { Write-Host "==> Using colourMatik in: $InstallDir"; return }
-    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
-                [Environment]::GetEnvironmentVariable("Path", "User")
-    # A returning user already HAS this folder, and `git clone` into an existing
-    # non-empty directory always fails ("destination path already exists"). The
-    # script then carried on and installed from the STALE folder — which is why
-    # re-running Setup could leave a machine on an old version no matter how many
-    # times it was run. Pull when it is a checkout; otherwise always refresh from
-    # the source zip, which works whether the folder exists or not.
-    $pulled = $false
-    if ((Test-Path (Join-Path $InstallDir ".git")) -and (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Host "==> Updating colourMatik..."
-        git -C $InstallDir pull --ff-only
-        $pulled = ($LASTEXITCODE -eq 0)
-    }
-    if (-not $pulled) {
+    # The program comes from the folder this script runs in - the copy Setup
+    # unpacked from itself (or a source folder someone downloaded). Nothing is
+    # fetched from GitHub here: a Setup carries everything it installs.
+    $same = (Test-Path $InstallDir) -and
+            ((Resolve-Path $InstallDir).Path.TrimEnd('\') -eq (Resolve-Path $Root).Path.TrimEnd('\'))
+    if ($same) {
+        Write-Host "==> Using colourMatik in: $InstallDir"
+    } else {
+        Write-Host "==> Placing colourMatik in $InstallDir"
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-        & (Join-Path $Root "windows\fetch-latest.ps1") -Dest $InstallDir
+        # Over the previous version, in place: .venv, vendored models and slot
+        # files are not part of the program and are left alone.
+        Copy-Item (Join-Path $Root '*') $InstallDir -Recurse -Force
     }
-    # Verify we really are on the code we just fetched, and say so out loud.
+    # Verify the folder really holds the program, and say which version.
     $vf = Join-Path $InstallDir "version.json"
     if (Test-Path $vf) {
         $vv = (Get-Content $vf -Raw | ConvertFrom-Json).version
-        Write-Host "==> colourMatik source is now $vv"
+        Write-Host "==> colourMatik is now $vv"
     } else {
-        throw "Source refresh failed - $InstallDir has no version.json."
+        throw "Placing the program failed - $InstallDir has no version.json."
     }
 }
 
 function Phase-Engine {
     Set-Location $InstallDir
-    Write-Host "==> Setting up the engine + AI (a few GB; 10-20 minutes on first run)"
+    Write-Host "==> Setting up the engine (its Python packages download on the first run)"
     powershell -NoProfile -ExecutionPolicy Bypass -File "$InstallDir\windows\setup.ps1"
     if ($LASTEXITCODE -ne 0) { throw "engine setup failed" }
 }

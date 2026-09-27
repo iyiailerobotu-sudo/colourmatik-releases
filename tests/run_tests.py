@@ -393,6 +393,153 @@ def test_frame_cap_and_solver():
     check("lattice fit works with the pre-1.12 SciPy API", float(np.abs(got - want).max()) < 1e-6)
 
 
+def test_update_check():
+    """The engine asks GitHub at most once a day (a click: at most every 10
+    minutes), failures included; it picks the highest versioned release for
+    this platform and names itself honestly in the User-Agent."""
+    print("\n=== 9. Update check: once a day, honest client ===")
+    import json, tempfile, time, urllib.request, urllib.error
+    from colourmatik import webapp as W
+    d = Path(tempfile.mkdtemp())
+    saved = (W._UPDATE_CACHE, W._fetch_releases, W._release_prefix, W._SLOT_DIR)
+    rel = lambda tag, **kw: {"tag_name": tag, "html_url": "https://example/" + tag, "body": "notes " + tag, **kw}
+    releases = [rel("windows-latest"), rel("darwin-latest"), rel("win-v1.8.2"), rel("mac-v1.8.3"),
+                rel("win-v1.10.0"), rel("win-v1.9.0"), rel("win-v2.0.0", draft=True),
+                rel("win-v1.11.0", prerelease=True), rel("win-v1.12"), rel("win-vX.Y.Z")]
+    calls = []
+    mode = {"reply": "ok"}
+
+    def fake_fetch(etag=""):
+        calls.append(etag)
+        if mode["reply"] == "fail":
+            raise OSError("offline")
+        if mode["reply"] == "304":
+            return 304, None, etag
+        return 200, releases, '"etag-1"'
+    W._UPDATE_CACHE, W._fetch_releases, W._SLOT_DIR = d / "update_check.json", fake_fetch, d
+    W._release_prefix = lambda: "win-v"
+    try:
+        def age(seconds):                   # pretend the last check was this long ago
+            c = json.loads(W._UPDATE_CACHE.read_text())
+            c["checked_at"] = time.time() - seconds
+            W._UPDATE_CACHE.write_text(json.dumps(c))
+        r = W.update_check()
+        check("first check asks GitHub once", len(calls) == 1 and r["cached"] is False)
+        check("newest = highest published win-v (1.10.0 > 1.9.0 > 1.8.2; drafts, prereleases, "
+              "fixed tags and malformed tags ignored)", r["version"] == "1.10.0", f"(got {r['version']})")
+        W.update_check(); W.update_check(); W.update_check(force=1)
+        check("panel opens and a click within 10 minutes use the cache", len(calls) == 1)
+        age(11 * 60)
+        W.update_check()
+        check("an automatic check still waits for the day", len(calls) == 1)
+        W.update_check(force=1)
+        check("a click after 10 minutes refreshes, conditionally (If-None-Match)",
+              len(calls) == 2 and calls[-1] == '"etag-1"')
+        age(25 * 3600); mode["reply"] = "304"
+        r = W.update_check()
+        check("after a day the automatic check refreshes; 304 keeps the known release",
+              len(calls) == 3 and r["version"] == "1.10.0" and r["cached"] is False)
+        age(25 * 3600); mode["reply"] = "fail"
+        r = W.update_check(); W.update_check(); W.update_check()
+        check("a failed check keeps the last known release", r["version"] == "1.10.0" and r["error"])
+        check("a failed check is not retried on every panel open", len(calls) == 4)
+        W._UPDATE_CACHE.unlink()
+        r = W.update_check()
+        check("offline with nothing known -> ok:false (panel says 'Check failed')",
+              r["ok"] is False and r["version"] is None and len(calls) == 5)
+        W._release_prefix = lambda: "mac-v"; mode["reply"] = "ok"
+        r = W.update_check()
+        check("a Mac engine reads mac-v releases (a win-v cache is not reused)",
+              r["version"] == "1.8.3" and len(calls) == 6)
+    finally:
+        W._UPDATE_CACHE, W._fetch_releases, W._release_prefix, W._SLOT_DIR = saved
+
+    # The real request: official API, honest User-Agent, conditional.
+    seen = {}
+
+    class Resp:
+        status = 200
+        headers = {"ETag": '"e2"'}
+        def read(self): return b"[]"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None, context=None):
+        seen["url"], seen["headers"] = req.full_url, {k.lower(): v for k, v in req.header_items()}
+        if seen["headers"].get("if-none-match"):
+            raise urllib.error.HTTPError(req.full_url, 304, "Not Modified", {}, None)
+        return Resp()
+    real = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        st, body, etag = W._fetch_releases()
+        ua = seen["headers"].get("user-agent", "")
+        check("asks the GitHub REST API for the releases list",
+              seen["url"].startswith("https://api.github.com/repos/iyiailerobotu-sudo/colourmatik-releases/releases"))
+        check("User-Agent names colourMatik, not a browser",
+              ua.startswith("colourMatik-engine/") and "mozilla" not in ua.lower(), f"(UA {ua!r})")
+        check("sends the API's Accept header", seen["headers"].get("accept") == "application/vnd.github+json")
+        st2, body2, etag2 = W._fetch_releases('"e2"')
+        check("304 Not Modified is an answer, not an error", (st, etag, st2, body2, etag2) == (200, '"e2"', 304, None, '"e2"'))
+    finally:
+        urllib.request.urlopen = real
+
+
+def test_github_policy():
+    """Account-protection rules, enforced on the shipped files: installing never
+    downloads from GitHub (no source archives, no raw files, no git), updates
+    fetch the one release file through the API as application/octet-stream
+    with an honest User-Agent, the panels leave GitHub to the engine, and CI
+    has no scheduled or push-triggered builds."""
+    print("\n=== 10. GitHub usage policy ===")
+    import re
+    root = Path(__file__).resolve().parents[1]
+    shipped = ["windows/install-windows.ps1", "windows/install-windows.cmd", "windows/fetch-latest.ps1",
+               "windows/update-windows.cmd", "windows/install-effect.ps1", "windows/install-panel.ps1",
+               "windows/setup.ps1", "windows/diag.ps1", "windows/setup/colourMatik.nsi",
+               "windows/setup/build-setup.ps1", "mac/app/install-mac.sh", "mac/app/build-app.sh",
+               "update.command", "install-panel.sh", "install-effect.sh",
+               "colourmatik-uxp/main.js", "colourmatik-cep/client/main.js", "colourmatik/webapp.py"]
+    forbidden = {"a source archive": r"archive/refs/|codeload\.github\.com|/zipball/|/tarball/",
+                 "a raw file": r"raw\.githubusercontent\.com",
+                 "a browser download link": r"releases/download/|releases/latest/download|browser_download_url"}
+    for rel_path in shipped:
+        text = (root / rel_path).read_text(encoding="utf-8", errors="replace")
+        for what, pat in forbidden.items():
+            hits = [ln.strip() for ln in text.splitlines() if re.search(pat, ln)]
+            check(f"{rel_path}: never downloads {what}", not hits, f"({hits[:2]})")
+    for rel_path in ["windows/install-windows.ps1", "windows/fetch-latest.ps1", "windows/update-windows.cmd",
+                     "windows/setup/colourMatik.nsi", "mac/app/install-mac.sh", "update.command"]:
+        text = (root / rel_path).read_text(encoding="utf-8", errors="replace")
+        hits = [ln.strip() for ln in text.splitlines()
+                if re.search(r"\bgit\s+(-C\s+\S+\s+)?(pull|clone|fetch)\b", ln) and not ln.lstrip().startswith(("#", "rem ", ";"))]
+        check(f"{rel_path}: no git pull/clone/fetch", not hits, f"({hits[:2]})")
+    for rel_path, request, own_ua in [("windows/fetch-latest.ps1", r"Invoke-(WebRequest|RestMethod)\b", r"-UserAgent \$ua\b"),
+                                      ("update.command", r"\bcurl\b", r'-A "\$UA"')]:
+        text = (root / rel_path).read_text(encoding="utf-8", errors="replace")
+        code = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+        requests = [ln.strip() for ln in code if re.search(request, ln)]
+        check(f"{rel_path}: downloads through api.github.com as application/octet-stream",
+              "api.github.com/repos/iyiailerobotu-sudo/colourmatik-releases" in text and "application/octet-stream" in text)
+        check(f"{rel_path}: every request sends its own User-Agent, never a browser's",
+              requests and all(re.search(own_ua, ln) for ln in requests) and "colourMatik-updater/" in text
+              and not any("mozilla" in ln.lower() for ln in code), f"({len(requests)} requests)")
+    for js in ["colourmatik-uxp/main.js", "colourmatik-cep/client/main.js"]:
+        text = (root / js).read_text(encoding="utf-8")
+        urls = set(re.findall(r"https?://[A-Za-z0-9.\-]+", text)) - {"http://127.0.0.1", "https://catheadai.com"}
+        check(f"{js}: talks only to the local engine (and opens the site)", not urls, f"({sorted(urls)})")
+    wf_dir = root / ".github" / "workflows"
+    for wf in sorted(wf_dir.glob("*.y*ml")):
+        text = wf.read_text(encoding="utf-8")
+        check(f"{wf.name}: no scheduled (cron) runs", not re.search(r"^\s*(schedule|- cron)\s*:", text, re.M))
+        on = re.search(r"^on:\s*\n((?:[ \t]+.*\n|\s*\n)*)", text, re.M)
+        triggers = re.findall(r"^  (\w[\w-]*):", on.group(1), re.M) if on else []
+        push = re.search(r"^  push:\s*\n((?:    .*\n)*)", on.group(1), re.M) if on else None
+        push_ok = push is None or set(re.findall(r"^    (\w[\w-]*):", push.group(1), re.M)) <= {"tags"}
+        check(f"{wf.name}: builds only by hand or on a tag",
+              on is not None and set(triggers) <= {"workflow_dispatch", "push"} and push_ok, f"(triggers {triggers})")
+
+
 if __name__ == "__main__":
     test_accuracy()
     test_distribution()
@@ -403,6 +550,8 @@ if __name__ == "__main__":
     test_robustness()
     test_slot_retention()
     test_frame_cap_and_solver()
+    test_update_check()
+    test_github_policy()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")

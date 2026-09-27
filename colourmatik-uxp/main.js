@@ -8,7 +8,7 @@ const uxp = require("uxp");
 
 const SERVER = "http://127.0.0.1:8765";
 const DEFAULT_INTENSITY = 100;   // 100 = the exact computed match; slider dials 0–200 live
-const LOCAL_VERSION = "1.8.1";
+const LOCAL_VERSION = "1.8.2";
 
 /* fetch with a hard timeout — a wedged engine must never freeze the panel */
 async function fetchT(url, opts, ms) {
@@ -17,9 +17,10 @@ async function fetchT(url, opts, ms) {
   try { return await fetch(url, { ...(opts || {}), signal: ctrl.signal }); }
   finally { clearTimeout(t); }
 }
-// Update checks read version.json straight from the GitHub repo (always hosted,
-// CORS-friendly). Bump version.json + this constant together on each release.
-const UPDATE_URL = "https://raw.githubusercontent.com/iyiailerobotu-sudo/colourmatik-releases/main/version.json";
+// Update checks go through the local engine (GET /update_check), which asks
+// GitHub at most once a day for the whole machine. The panel never contacts
+// GitHub itself: it used to fetch version.json from there on every open, in
+// every host. Bump LOCAL_VERSION with the release.
 const SITE_URL = "https://catheadai.com";
 
 const $ = (id) => document.getElementById(id);
@@ -833,12 +834,16 @@ async function runSelfUpdate(fromVersion) {
     let pct = 0.02, msg = "Starting";
     while (Date.now() - t0 < 15 * 60 * 1000) {
       await _sleep(900);
+      let failed = null;
       try {
         const pr = await fetchT(SERVER + "/update_progress", { cache: "no-cache" }, 2500);
         const pj = await pr.json();
-        if (pj && pj.failed) throw new Error(pj.msg || "the updater reported a failure");
-        if (pj && typeof pj.pct === "number") { pct = Math.max(pct, pj.pct); if (pj.msg) msg = pj.msg; }
+        if (pj && pj.failed) failed = pj.msg || "the updater reported a failure";
+        else if (pj && typeof pj.pct === "number") { pct = Math.max(pct, pj.pct); if (pj.msg) msg = pj.msg; }
       } catch (e) {}                     // engine restarting — keep the bar alive
+      // Thrown inside the try above, a FAIL line was swallowed by the catch that
+      // is only meant for engine restarts: the bar then ran on to its timeout.
+      if (failed) { const fe = new Error(failed); fe.fromUpdater = true; throw fe; }
       _paintFill(pct);
       _chamPlace(pct);
       $("run-label").textContent = "UPDATING " + Math.round(pct * 100) + "%  ·  " + msg;
@@ -858,7 +863,8 @@ async function runSelfUpdate(fromVersion) {
     }
     throw new Error("timed out");
   } catch (e) {
-    setStatus("ERROR", "Update couldn't finish: " + (e.message || e) + ". It may still be running — check again in a minute.", "error");
+    setStatus("ERROR", "Update couldn't finish: " + (e.message || e) +
+      (e.fromUpdater ? "" : ". It may still be running — check again in a minute."), "error");
     el.textContent = "Update failed — retry";
     updateReady = true;
   } finally {
@@ -900,6 +906,16 @@ async function _installedVersion() {
   if (!eng) return LOCAL_VERSION;
   return semverGt(eng, LOCAL_VERSION) ? LOCAL_VERSION : eng;
 }
+/* The newest release as the engine knows it (GET /update_check). force is the
+ * user's click: the engine may then refresh a check older than 10 minutes;
+ * otherwise it answers from its once-a-day check. */
+async function _latestRelease(force) {
+  const r = await fetchT(SERVER + "/update_check" + (force ? "?force=1" : ""), { cache: "no-cache" }, 20000);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json();
+  if (!j || (!j.version && !j.ok)) throw new Error((j && j.error) || "no answer");
+  return j;
+}
 async function checkForUpdates() {
   const el = $("update-link");
   if (_updating) return;
@@ -913,9 +929,7 @@ async function checkForUpdates() {
       return;
     }
     const local = await _installedVersion();
-    const r = await fetchT(UPDATE_URL, { cache: "no-cache" }, 10000);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const j = await r.json();
+    const j = await _latestRelease(true);
     if (j.version && semverGt(j.version, local)) {
       // One click: a newer version found by this click is installed right
       // away. It used to stop at "Update vX — install" and wait for a SECOND
@@ -950,12 +964,13 @@ $("update-link").addEventListener("click", checkForUpdates);
 $("version").textContent = "v" + LOCAL_VERSION;
 
 /* ---- AUTOMATIC updates ----------------------------------------------------
- * On every panel open: compare the shipped version.json against what is
- * actually installed (the engine's /version) and, if newer, START THE UPDATE
- * without any clicks. Windows shows its one unavoidable admin prompt; after
- * that the updater pulls, reinstalls panel+effect and restarts the engine —
- * the user only restarts Premiere when it finishes. Runs once per panel open,
- * at startup only, so it can never interrupt a match in progress. */
+ * Once per panel open, as soon as the engine answers: compare the newest
+ * release (the engine's once-a-day check) against what is actually installed
+ * (the engine's /version) and, if newer, START THE UPDATE without any clicks.
+ * Windows shows its one unavoidable admin prompt; after that the updater
+ * downloads the new Setup, reinstalls panel+effect and restarts the engine —
+ * the user only restarts Premiere when it finishes. Runs at startup only, so
+ * it can never interrupt a match in progress. */
 async function autoUpdateCheck() {
   try {
     const pend = await _restartPending();
@@ -965,20 +980,18 @@ async function autoUpdateCheck() {
       return;
     }
     const local = await _installedVersion();
-    const r = await fetchT(UPDATE_URL, { cache: "no-cache" }, 10000);
-    if (!r.ok) return;
-    const j = await r.json();
+    const j = await _latestRelease(false);
     if (!(j && j.version && semverGt(j.version, local))) return;
     // Fully automatic, fully in-panel: bar below, no windows, no browser.
     runSelfUpdate(local);
   } catch (e) {}
 }
-setTimeout(autoUpdateCheck, 1500);
 
 /* The engine imports heavy AI libraries and takes ~30s to answer after login,
  * install or an update — during which every call fails and the panel used to
  * open straight into a scary red ERROR. Poll it on open and say what is
- * actually happening; flip to READY the moment it answers. */
+ * actually happening; flip to READY the moment it answers - and only then run
+ * the once-per-open update check, which needs the engine. */
 (async function engineWait() {
   for (let i = 0; i < 40; i++) {
     try {
@@ -986,6 +999,7 @@ setTimeout(autoUpdateCheck, 1500);
       const j = await r.json();
       if (j && j.version) {
         if (i > 0) setStatus("READY", "Engine is up (v" + j.version + "). Pick a reference and a target.", "idle");
+        autoUpdateCheck();
         return;
       }
     } catch (e) {}

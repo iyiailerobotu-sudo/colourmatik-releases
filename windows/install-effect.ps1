@@ -1,42 +1,33 @@
 # colourMatik — install the native effect (.aex) into Premiere Pro (Windows, x64).
-# Uses a local build if present (windows\colourMatik.aex or colourmatik-fx\colourMatik.aex),
-# otherwise downloads it from the project's latest GitHub release. Needs admin for
-# the shared MediaCore folder (the caller elevates).
+# The effect ships with the program (colourmatik-fx\colourMatik.aex, built by the
+# windows-effect workflow; windows\colourMatik.aex wins if present) - it is never
+# downloaded. Needs admin for the shared MediaCore folder (the caller elevates).
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $DestDir = "C:\Program Files\Adobe\Common\Plug-ins\7.0\MediaCore"
 $Dest = Join-Path $DestDir "colourMatik.aex"
-$ReleaseAsset = "https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/windows-latest/colourMatik-effect-windows.zip"
 
-$local = @("$Root\windows\colourMatik.aex", "$Root\colourmatik-fx\colourMatik.aex") |
-         Where-Object { Test-Path $_ } | Select-Object -First 1
+$Src = @("$Root\windows\colourMatik.aex", "$Root\colourmatik-fx\colourMatik.aex") |
+       Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $Src) { throw "colourMatik.aex is not in $Root\colourmatik-fx - run Setup again to restore the program." }
+Write-Host "==> Using the effect build: $Src"
 
-# Resolve the .aex once into $Src (local build, else the release zip).
-if ($local) {
-    Write-Host "==> Using local build: $local"
-    $Src = $local
-} else {
-    Write-Host "==> Downloading the effect from the latest release..."
-    $tmp = Join-Path $env:TEMP "colourMatik-effect-windows.zip"
-    Invoke-WebRequest -Uri $ReleaseAsset -OutFile $tmp -UseBasicParsing
-    $ext = Join-Path $env:TEMP "colourMatik-effect-win"
-    if (Test-Path $ext) { Remove-Item -Recurse -Force $ext }
-    Expand-Archive $tmp $ext
-    # The zip carries BOTH builds now, so pick by exact name — a bare *.aex
-    # match could hand Premiere the AE variant (wrong match name).
-    $aex = Get-ChildItem $ext -Recurse -Filter "colourMatik.aex" | Select-Object -First 1
-    if (-not $aex) { throw "colourMatik.aex not found in the release zip." }
-    $Src = $aex.FullName
-    $aeFromZip = Get-ChildItem $ext -Recurse -Filter "colourMatik-ae.aex" |
-                 Select-Object -First 1
-    if ($aeFromZip) { $AeSrcFromZip = $aeFromZip.FullName }
+# A running Premiere / After Effects holds its loaded .aex open, and overwriting
+# it fails - which stopped this script before the AE panel step on every update
+# started from the panel. An identical copy needs no write at all.
+function Install-Aex([string]$from, [string]$to) {
+    if ((Test-Path $to) -and ((Get-FileHash $from).Hash -eq (Get-FileHash $to).Hash)) {
+        Write-Host "Effect already current -> $to"
+        return
+    }
+    Copy-Item $from $to -Force
+    Unblock-File $to -ErrorAction SilentlyContinue
+    Write-Host "Effect installed -> $to"
 }
 
 # 1) Premiere Pro / Media Encoder: the shared MediaCore folder.
 New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
-Copy-Item $Src $Dest -Force
-Unblock-File $Dest -ErrorAction SilentlyContinue
-Write-Host "Effect installed (Premiere) -> $Dest"
+Install-Aex $Src $Dest
 
 # 2) After Effects does NOT load effects from MediaCore — only from its OWN
 #    Plug-ins folder. Install a copy for every AE version present, or the effect
@@ -53,11 +44,8 @@ foreach ($aeRoot in $aeRoots) {
             # AE gets the distinct-match-name variant (avoids AE's "duplicated
             # effect plugin" warning); falls back to the main build if absent.
             $aeSrc = @("$Root\colourmatik-fx\colourMatik-ae.aex", "$Root\windows\colourMatik-ae.aex") | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $aeSrc -and $AeSrcFromZip) { $aeSrc = $AeSrcFromZip }   # downloaded install
             if (-not $aeSrc) { $aeSrc = $Src }
-            Copy-Item $aeSrc $aeDest -Force
-            Unblock-File $aeDest -ErrorAction SilentlyContinue
-            Write-Host "Effect installed (After Effects) -> $aeDest"
+            Install-Aex $aeSrc $aeDest
             # remove the deprecated ScriptUI panel from older installs
             $oldJsx = Join-Path $_.FullName "Support Files\Scripts\ScriptUI Panels\colourMatik.jsx"
             if (Test-Path $oldJsx) { Remove-Item -Force $oldJsx -ErrorAction SilentlyContinue }

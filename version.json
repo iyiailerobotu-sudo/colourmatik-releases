@@ -1,5 +1,5 @@
 {
-  "version": "1.8.1",
+  "version": "1.8.2",
   "url": "https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/windows-latest/colourMatik-windows-setup.exe",
-  "notes": "colourMatik 1.8.1 — new download home. colourMatik now lives at github.com/iyiailerobotu-sudo/colourmatik-releases: the installers, the one-click updater and the update check all use it. Otherwise identical to 1.8.0 (one-click updates)."
+  "notes": "colourMatik 1.8.2 - installs and updates without source downloads: the Windows Setup and the Mac installer carry the whole program, an update downloads the one release file through the GitHub API, and the update check runs at most once a day."
 }

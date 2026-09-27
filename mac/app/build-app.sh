@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build the one-double-click macOS installer "colourMatik Installer.app".
+# Build the one-double-click macOS installer "colourMatik Installer.app" - it
+# carries the whole program (Resources/payload.zip), nothing is downloaded.
 # It is signed with Developer ID Application (which we have) and notarized, so it
 # opens with NO Gatekeeper warning — download, unzip, double-click, done.
 #
@@ -25,6 +26,39 @@ osacompile -o "$APP" "$APPDIR/installer.applescript"
 echo "==> Bundling install-mac.sh"
 cp "$APPDIR/install-mac.sh" "$APP/Contents/Resources/install-mac.sh"
 chmod +x "$APP/Contents/Resources/install-mac.sh"
+
+# The installer carries the whole program as Resources/payload.zip, so installing
+# (and the in-app updater, which downloads this same zip) never fetches source
+# from GitHub. It packs the COMMITTED tree - `git archive HEAD`, so uncommitted
+# edits are not shipped - minus what .gitattributes marks export-ignore
+# (artwork, tests, CI).
+echo "==> Bundling the program (payload.zip)"
+HEAD_REV="$(git -C "$ROOT" rev-parse --short HEAD)"
+if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ]; then
+  echo "  !! uncommitted changes are NOT in this installer - it packs HEAD ($HEAD_REV)"
+fi
+STAGE="$BUILD/payload"; mkdir -p "$STAGE/colourMatik"
+# autocrlf=false: the plug-ins' _CodeSignature/CodeResources are text plists, and
+# a single rewritten line ending breaks their signature.
+git -C "$ROOT" -c core.autocrlf=false archive --format=tar HEAD | tar -x -C "$STAGE/colourMatik"
+PVER="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$STAGE/colourMatik/version.json")"
+[ "$PVER" = "$VER" ] || { echo "  x HEAD says $PVER but version.json here says $VER - commit the version bump first."; exit 1; }
+# The .ccx is what Adobe's agent installs: a stale one would put an old panel on
+# every new Mac while everything else says $VER.
+CCXVER="$(/usr/bin/python3 -c 'import json,sys,zipfile; print(json.loads(zipfile.ZipFile(sys.argv[1]).read("manifest.json"))["version"])' "$STAGE/colourMatik/colourmatik-uxp/colourMatik.ccx")"
+[ "$CCXVER" = "$VER" ] || { echo "  x colourMatik.ccx carries $CCXVER, not $VER - rebuild the .ccx first."; exit 1; }
+if [ "$MODE" = "sign" ]; then
+  # Notarization inspects the program inside payload.zip as well: every plug-in
+  # bundle in it needs a valid Developer ID signature (re-signed only if not).
+  for b in "$STAGE"/colourMatik/colourmatik-fx/*.plugin; do
+    codesign --verify --strict "$b" 2>/dev/null || {
+      echo "  signing $(basename "$b")"
+      codesign --force --options runtime --timestamp --sign "$APP_IDENTITY" "$b"; }
+  done
+fi
+/usr/bin/ditto -c -k --keepParent "$STAGE/colourMatik" "$APP/Contents/Resources/payload.zip"
+rm -rf "$STAGE"
+echo "  payload.zip: colourMatik $VER from $HEAD_REV ($(du -h "$APP/Contents/Resources/payload.zip" | awk '{print $1}'))"
 
 echo "==> Icon + Info.plist"
 cp "$ROOT/assets/icons/colourMatik.icns" "$APP/Contents/Resources/applet.icns"

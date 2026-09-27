@@ -62,8 +62,9 @@ cd colourMatik
 Then **restart Premiere Pro**. The engine runs automatically after install; start it manually any time
 with `./colourmatik-app`.
 
-**Updating:** double-click **`update.command`** (in the installed `~/colourMatik` folder) — it pulls the
-latest and reinstalls. **Removing:** double-click **`uninstall.command`**.
+**Updating:** the panel updates itself in one click (it checks at most once a day). By hand: double-click
+**`update.command`** (in the installed `~/colourMatik` folder) — it downloads the newest installer (one file,
+through the GitHub API), takes the program out of it and reinstalls. **Removing:** double-click **`uninstall.command`**.
 
 ## Install (Windows 10/11, x64) — beta
 
@@ -73,15 +74,23 @@ latest and reinstalls. **Removing:** double-click **`uninstall.command`**.
 **Easiest — one file, double-click (like the Mac installer):**
 1. Download **[colourMatik-windows-setup.exe](https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/windows-latest/colourMatik-windows-setup.exe)** from the latest release.
 2. Double-click it. (If SmartScreen warns: *More info ▸ Run anyway* — the effect itself is
-   CI-built from this repo.) It downloads the latest colourMatik and installs everything:
-   Python 3.11 / git / ffmpeg (winget), engine + AI, the Premiere panel, the native effect,
-   and engine autostart. Approve the one admin prompt (Premiere's shared plug-ins folder).
+   CI-built from this repo.) The whole program is inside the Setup — nothing is downloaded from
+   GitHub. It installs Python 3.11 / ffmpeg (winget) if missing, the engine and its Python packages,
+   the Premiere and After Effects panels, the native effect, and engine autostart. Approve the one
+   admin prompt (Premiere's shared plug-ins folder).
 3. **Restart Premiere Pro** → *Window ▸ UXP Plugins ▸ colourMatik*.
 
 *(Manual alternative: Code ▸ Download ZIP → run `windows\install-windows.cmd`.)*
 
-**Updating:** `windows\update-windows.cmd` · **Removing:** `windows\uninstall-windows.cmd` ·
+**Updating:** the panel updates itself in one click (it checks at most once a day); by hand:
+`windows\update-windows.cmd` — it downloads the newest Setup (one file, through the GitHub API) and
+installs the program inside it. · **Removing:** `windows\uninstall-windows.cmd` ·
 **Engine console (debug):** `windows\colourmatik-app.cmd`
+
+*Building the installers:* Windows — `windows\setup\build-setup.ps1` (NSIS 3; packs the committed tree
+into `colourMatik-windows-setup.exe`). macOS — `./mac/app/build-app.sh sign` on the Mac (packs it into
+the notarized installer app as `payload.zip`). A release is one file per fixed tag (`windows-latest`,
+`darwin-latest`) plus its versioned copy (`win-vX.Y.Z` / `mac-vX.Y.Z`, published right after).
 
 *Building the Windows effect yourself:* the `.aex` is compiled by the
 [`windows-effect`](.github/workflows/windows-effect.yml) GitHub Action — run it manually and

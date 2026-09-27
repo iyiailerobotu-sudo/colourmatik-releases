@@ -1,7 +1,9 @@
 #!/bin/bash
 # colourMatik macOS installer — launched (as root) by "colourMatik Installer.app".
-# Downloads the latest colourMatik and sets up EVERYTHING: the local engine, the
-# Premiere + After Effects panels, the native effect, and login autostart. Runs headless; the app
+# Installs the colourMatik the app carries (Contents/Resources/payload.zip, packed
+# by build-app.sh - nothing is downloaded from GitHub) and sets up EVERYTHING:
+# the local engine, the Premiere + After Effects panels, the native effect, and
+# login autostart. Runs headless; the app
 # shows a live progress bar by reading the PROGRESS file this script writes
 # ("PCT|CAP|message" per stage; "100|100|done" on success, "FAIL|0|reason" on error).
 #
@@ -41,19 +43,17 @@ asuser() { /bin/launchctl asuser "$USER_UID" /usr/bin/sudo -u "$CONSOLE_USER" "$
 notify() { asuser /usr/bin/osascript -e "display notification \"$1\" with title \"colourMatik\"" >/dev/null 2>&1 || true; }
 fail()   { echo "FAIL: $1"; prog FAIL 0 "$1"; notify "Install failed — $1"; exit 1; }
 
-# 0) download the latest source (as the user), unzip
-prog 5 10 "Downloading colourMatik…"
-echo "Downloading colourMatik…"
+# 0) unpack the program this installer carries (as the user). It sits next to
+#    this script inside the app: Contents/Resources/payload.zip -> colourMatik/
+prog 5 10 "Unpacking colourMatik…"
+echo "Unpacking colourMatik…"
+PAYLOAD="$(cd "$(dirname "$0")" && pwd)/payload.zip"
+[ -f "$PAYLOAD" ] || fail "this installer is incomplete (no payload.zip) — download it again"
 SRC="$(asuser /usr/bin/mktemp -d "/tmp/colourMatik-src.XXXXXX")"
-asuser /usr/bin/curl -fsSL "https://github.com/iyiailerobotu-sudo/colourmatik-releases/archive/refs/heads/main.zip" -o "$SRC/main.zip" || fail "download failed"
-asuser /usr/bin/ditto -x -k "$SRC/main.zip" "$SRC" || fail "unzip failed"
-# GitHub names the archive's top folder "<repo>-<branch>": colourmatik-releases-main
-# since the move to the new repo. Bash globs are case-SENSITIVE even on a
-# case-insensitive disk, so the old "colourMatik-*" pattern matched nothing and
-# every install stopped at "extract failed". Take the one folder the zip holds.
-INNER="$(/bin/ls -d "$SRC"/*/ 2>/dev/null | /usr/bin/head -1)"; INNER="${INNER%/}"
-[ -z "$INNER" ] && fail "extract failed"
-echo "source: $INNER"
+asuser /usr/bin/ditto -x -k "$PAYLOAD" "$SRC" || fail "unzip failed"
+INNER="$SRC/colourMatik"
+[ -f "$INNER/version.json" ] || fail "extract failed"
+echo "source: $INNER ($(/usr/bin/grep -o '"version": *"[^"]*"' "$INNER/version.json"))"
 
 # 1) place the code in ~/colourMatik (user-owned)
 prog 10 13 "Preparing files…"
@@ -65,7 +65,7 @@ prog 10 13 "Preparing files…"
 # 2) Python 3.11+ — the ONLY prerequisite. If missing, install the official
 #    python.org package: we are root, so `installer` runs silently and
 #    deterministically. No Homebrew, no git, no Xcode tools, no system ffmpeg
-#    (ffmpeg is bundled via the imageio-ffmpeg pip package; CanonCGT comes as a zip).
+#    (ffmpeg is bundled via the imageio-ffmpeg pip package).
 have_py() {
   for c in python3.11 \
            /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11 \
@@ -194,7 +194,7 @@ PL
   fi
 fi
 
-# clean up the download
+# clean up the unpacked copy
 /bin/rm -rf "$SRC" 2>/dev/null || true
 
 echo "== colourMatik install done $(date) =="

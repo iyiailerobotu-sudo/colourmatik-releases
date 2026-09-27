@@ -27,3 +27,8 @@ build/
 
 # Notarization build output
 dist/
+
+# Windows Setup build (windows/setup/build-setup.ps1): the staged program and the
+# built installer - it is uploaded to the release, never committed
+windows/setup/payload/
+windows/setup/colourMatik-windows-setup.exe
