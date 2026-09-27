@@ -32,11 +32,13 @@ if (-not (Test-Path ".venv")) {
     Write-Host "==> Creating virtualenv (.venv)"
     & cmd /c "$py -m venv .venv"
 }
-$pip = ".\.venv\Scripts\pip.exe"
-& $pip install --quiet --upgrade pip
+# Always "python -m pip", never pip.exe: on Windows pip.exe cannot replace itself,
+# so "pip.exe install --upgrade pip" logged an ERROR on every update and pip never moved.
+$python = ".\.venv\Scripts\python.exe"
+& $python -m pip install --quiet --upgrade pip
 
 Write-Host "==> Installing base engine deps"
-& $pip install -r requirements.txt
+& $python -m pip install -r requirements.txt
 if ($LASTEXITCODE -ne 0) { throw "Installing the engine's dependencies failed - see the messages above." }
 
 # -NoAI is obsolete: the default IS the classical engine now.
@@ -56,6 +58,6 @@ Write-Host "    (First AI run also auto-downloads the SegFormer scene model, ~15
 # Prove the environment can actually start before declaring success — a silent
 # pip failure used to leave a machine the installer called "complete" and the
 # panel could never connect to.
-& ".\.venv\Scripts\python.exe" -c "import fastapi, numpy, cv2" 2>$null
+& $python -c "import fastapi, numpy, cv2" 2>$null
 if ($LASTEXITCODE -ne 0) { throw "The engine environment is incomplete (a dependency is missing)." }
 Write-Host "==> Engine environment verified."
