@@ -40,9 +40,23 @@ BrandingText "colourMatik  -  catheadai.com"
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_LANGUAGE "English"
 
+; 64-bit PowerShell for every phase. This installer is a 32-bit program, and a
+; plain "powershell" started from it is the 32-bit one (WOW64 redirects System32
+; to SysWOW64). There $env:ProgramFiles is "C:\Program Files (x86)": the panel
+; step never found Adobe's plugin agent and wrote its machine-wide registration
+; under Program Files (x86)\Common Files\Adobe\UXP, which 64-bit Premiere never
+; reads - so a Setup install only ever had the per-user fallback. Sysnative is
+; the 32-bit process's window onto the real 64-bit System32.
+Var PSEXE
+Function .onInit
+  StrCpy $PSEXE "powershell"
+  IfFileExists "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" 0 +2
+    StrCpy $PSEXE "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+FunctionEnd
+
 ; Run one installer phase; $1 = exit code afterwards.
 !macro RunPhase PHASE
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$TEMP\colourmatik-src\src\windows\install-windows.ps1" -Phase ${PHASE}'
+  nsExec::ExecToLog '"$PSEXE" -NoProfile -ExecutionPolicy Bypass -File "$TEMP\colourmatik-src\src\windows\install-windows.ps1" -Phase ${PHASE}'
   Pop $1
 !macroend
 
@@ -62,7 +76,7 @@ Section "colourMatik"
   FileWrite $0 "$$inner=Get-ChildItem $$d -Directory | Select-Object -First 1$\r$\n"
   FileWrite $0 "Rename-Item $$inner.FullName 'src'$\r$\n"
   FileClose $0
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$TEMP\colourMatik-setup\dl.ps1"'
+  nsExec::ExecToLog '"$PSEXE" -NoProfile -ExecutionPolicy Bypass -File "$TEMP\colourMatik-setup\dl.ps1"'
   Pop $1
   StrCmp $1 "0" +3 0
     MessageBox MB_OK|MB_ICONEXCLAMATION "Could not download colourMatik (code $1). Check your internet connection and run Setup again."
