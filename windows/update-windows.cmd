@@ -69,8 +69,8 @@ rem   update.log itself. cmd's ">>" wants the file to itself, and the window
 rem   that asked for admin rights holds it a moment longer: wait up to ~20 s,
 rem   then run unlogged rather than not at all. /elevated never asks again: a
 rem   PC that cannot elevate updates what it can instead of relaunching forever.
-rem - fetch-latest.ps1 downloads the newest Windows Setup (one file, through
-rem   the GitHub API) and unpacks its program over this folder. Never a git
+rem - fetch-latest.ps1 downloads the newest Windows Setup (one file, from
+rem   releases.catheadai.com) and unpacks its program over this folder. Never a git
 rem   pull or a source zip, so every install updates the same way. It lives in
 rem   its own .ps1 so no PowerShell parentheses are ever echoed inside a batch
 rem   block. On failure stop HERE: running the steps below over the old code

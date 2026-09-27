@@ -8,7 +8,7 @@ const uxp = require("uxp");
 
 const SERVER = "http://127.0.0.1:8765";
 const DEFAULT_INTENSITY = 100;   // 100 = the exact computed match; slider dials 0–200 live
-const LOCAL_VERSION = "1.8.2";
+const LOCAL_VERSION = "1.8.3";
 
 /* fetch with a hard timeout — a wedged engine must never freeze the panel */
 async function fetchT(url, opts, ms) {
@@ -17,10 +17,11 @@ async function fetchT(url, opts, ms) {
   try { return await fetch(url, { ...(opts || {}), signal: ctrl.signal }); }
   finally { clearTimeout(t); }
 }
-// Update checks go through the local engine (GET /update_check), which asks
-// GitHub at most once a day for the whole machine. The panel never contacts
-// GitHub itself: it used to fetch version.json from there on every open, in
-// every host. Bump LOCAL_VERSION with the release.
+// Update checks go through the local engine (GET /update_check), which reads
+// releases.catheadai.com/colourmatik/latest.json at most once a day for the
+// whole machine. The panel never goes online itself: it used to fetch
+// version.json from GitHub on every open, in every host. Bump LOCAL_VERSION
+// with the release.
 const SITE_URL = "https://catheadai.com";
 
 const $ = (id) => document.getElementById(id);
@@ -810,7 +811,7 @@ let updateReady = false;   // first click checks; once found, the next click INS
 let _updating = false;
 const _sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 /* Self-contained in-panel update: the engine runs the updater silently (no
- * Terminal, no browser, no GitHub — ever) and writes progress to a file; we
+ * Terminal, no browser, no web request from the panel) and writes progress to a file; we
  * drive the big button's bar from it, then detect the restarted engine's new
  * version and call it done. */
 async function runSelfUpdate(fromVersion) {

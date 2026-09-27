@@ -1,5 +1,5 @@
 {
-  "version": "1.8.2",
-  "url": "https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/windows-latest/colourMatik-windows-setup.exe",
-  "notes": "colourMatik 1.8.2 - installs and updates without source downloads: the Windows Setup and the Mac installer carry the whole program, an update downloads the one release file through the GitHub API, and the update check runs at most once a day."
+  "version": "1.8.3",
+  "url": "https://releases.catheadai.com/colourmatik/colourMatik-windows-setup.exe",
+  "notes": "colourMatik 1.8.3 - downloads and updates now come from releases.catheadai.com (our own server) instead of GitHub; the update check still runs at most once a day. The Windows updater logs every step and reports a declined admin prompt at once."
 }

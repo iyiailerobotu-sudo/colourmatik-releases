@@ -13,10 +13,10 @@ try {
   cs.evalScript('$.evalFile("' + _jsxPath + '")');
 } catch (e) {}
 var SERVER_HOST = "127.0.0.1", SERVER_PORT = 8765;
-var LOCAL_VERSION = "1.8.2";
-// Update checks go through the local engine (GET /update_check), which asks
-// GitHub at most once a day for the whole machine - the panel never contacts
-// GitHub itself.
+var LOCAL_VERSION = "1.8.3";
+// Update checks go through the local engine (GET /update_check), which reads
+// releases.catheadai.com/colourmatik/latest.json at most once a day for the
+// whole machine - the panel never goes online itself.
 var SITE_URL = "https://catheadai.com";
 var DEFAULT_INTENSITY = 100;
 
@@ -460,7 +460,8 @@ var updateReady = false;   // first click checks; once found, the next click INS
 var _updating = false;
 function _sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 /* Self-contained in-panel update: silent updater + progress file through the
- * engine; the big button's bar is the UI. No windows, no browser, no GitHub. */
+ * engine; the big button's bar is the UI. No windows, no browser, no web
+ * request from the panel. */
 async function runSelfUpdate(fromVersion) {
   if (_updating) return;
   if (_running) {                              // never restart the engine mid-match

@@ -41,7 +41,7 @@ difference; **< 1 = the eye can't tell**). Verified against an independent `.cub
 ## Install (macOS, Apple Silicon)
 
 **Easiest — one file, double-click (notarized, no warnings):**
-1. Download **[colourMatik-mac.zip](https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/darwin-latest/colourMatik-mac.zip)** from the latest release.
+1. Download **[colourMatik-mac.zip](https://releases.catheadai.com/colourmatik/colourMatik-mac.zip)** (catheadai.com).
 2. It unzips itself on download — double-click **colourMatik Installer**.
 3. Enter your Mac password once. It then installs everything in the background (about 10–20 minutes)
    and shows a notification when it's ready. Then **restart Premiere Pro**.
@@ -64,7 +64,7 @@ with `./colourmatik-app`.
 
 **Updating:** the panel updates itself in one click (it checks at most once a day). By hand: double-click
 **`update.command`** (in the installed `~/colourMatik` folder) — it downloads the newest installer (one file,
-through the GitHub API), takes the program out of it and reinstalls. **Removing:** double-click **`uninstall.command`**.
+from releases.catheadai.com), takes the program out of it and reinstalls. **Removing:** double-click **`uninstall.command`**.
 
 ## Install (Windows 10/11, x64) — beta
 
@@ -72,7 +72,7 @@ through the GitHub API), takes the program out of it and reinstalls. **Removing:
 > verified on a Windows machine — please report anything odd.
 
 **Easiest — one file, double-click (like the Mac installer):**
-1. Download **[colourMatik-windows-setup.exe](https://github.com/iyiailerobotu-sudo/colourmatik-releases/releases/download/windows-latest/colourMatik-windows-setup.exe)** from the latest release.
+1. Download **[colourMatik-windows-setup.exe](https://releases.catheadai.com/colourmatik/colourMatik-windows-setup.exe)** (catheadai.com).
 2. Double-click it. (If SmartScreen warns: *More info ▸ Run anyway* — the effect itself is
    CI-built from this repo.) The whole program is inside the Setup — nothing is downloaded from
    GitHub. It installs Python 3.11 / ffmpeg (winget) if missing, the engine and its Python packages,
@@ -83,14 +83,21 @@ through the GitHub API), takes the program out of it and reinstalls. **Removing:
 *(Manual alternative: Code ▸ Download ZIP → run `windows\install-windows.cmd`.)*
 
 **Updating:** the panel updates itself in one click (it checks at most once a day); by hand:
-`windows\update-windows.cmd` — it downloads the newest Setup (one file, through the GitHub API) and
+`windows\update-windows.cmd` — it downloads the newest Setup (one file, from releases.catheadai.com) and
 installs the program inside it; every step logs to `%APPDATA%\colourMatik\update.log`. · **Removing:** `windows\uninstall-windows.cmd` ·
 **Engine console (debug):** `windows\colourmatik-app.cmd`
 
 *Building the installers:* Windows — `windows\setup\build-setup.ps1` (NSIS 3; packs the committed tree
 into `colourMatik-windows-setup.exe`). macOS — `./mac/app/build-app.sh sign` on the Mac (packs it into
-the notarized installer app as `payload.zip`). A release is one file per fixed tag (`windows-latest`,
-`darwin-latest`) plus its versioned copy (`win-vX.Y.Z` / `mac-vX.Y.Z`, published right after).
+the notarized installer app as `payload.zip`).
+
+*Publishing:* downloads and updates come from our Cloudflare R2 bucket, served at
+`https://releases.catheadai.com/colourmatik/`: the installers under fixed names
+(`colourMatik-windows-setup.exe`, `colourMatik-mac.zip`), then — last — `latest.json`
+(`{version, mac: {url, size, sha256, version}, windows: {…}}`), which the website and the engines'
+once-a-day update check read. How to upload: `tools/r2-upload/README.md` in the website repo. The GitHub
+releases (`windows-latest` / `win-vX.Y.Z`, `darwin-latest` / `mac-vX.Y.Z`) are only a backup that lets
+installs older than 1.8.3 — which still look there — find their way to an R2 version.
 
 *Building the Windows effect yourself:* the `.aex` is compiled by the
 [`windows-effect`](.github/workflows/windows-effect.yml) GitHub Action — run it manually and

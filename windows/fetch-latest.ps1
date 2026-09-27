@@ -1,11 +1,11 @@
 # colourMatik - refresh the install directory from the newest Windows Setup.
 #
 # The Setup carries the whole program, so an update needs exactly one file: the
-# same colourMatik-windows-setup.exe the website links to (release tag
-# windows-latest). It is fetched the official way - the GitHub REST API, asset
-# download with "Accept: application/octet-stream", and a User-Agent that says
-# what we are (never a browser's) - and then asked to unpack itself
-# (/EXTRACT=<folder>) instead of installing. No source zip, no raw files.
+# same colourMatik-windows-setup.exe the website links to, on our own download
+# server (releases.catheadai.com - Cloudflare R2, not GitHub). Its latest.json
+# names the file with its size and SHA-256; the download must match both, and
+# then the Setup is asked to unpack itself (/EXTRACT=<folder>) instead of
+# installing. The User-Agent says what we are, never a browser.
 #
 # Kept as its own file on purpose: building this inline inside update-windows.cmd
 # meant echoing PowerShell (which is full of parentheses) into a parenthesised
@@ -19,8 +19,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'      # the progress UI slows downloads 10x
-$Api = 'https://api.github.com/repos/iyiailerobotu-sudo/colourmatik-releases'
-$AssetName = 'colourMatik-windows-setup.exe'
+$Latest = 'https://releases.catheadai.com/colourmatik/latest.json'
+$Downloads = 'https://releases.catheadai.com/colourmatik/'
 
 # A machine with TEMP unset (or redirected to nothing) would otherwise fail on
 # a null path before downloading anything.
@@ -38,16 +38,19 @@ try {
         $ua = "colourMatik-updater/$installed (Windows)"
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         Write-Host "==> Looking up the newest colourMatik release..."
-        $rel = Invoke-RestMethod "$Api/releases/tags/windows-latest" -UserAgent $ua -UseBasicParsing `
-                   -Headers @{ 'Accept' = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-        $asset = @($rel.assets) | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
-        if (-not $asset) { throw "The windows-latest release has no $AssetName." }
-        $SetupExe = Join-Path $tmp $AssetName
-        Write-Host ("==> Downloading {0} ({1:N1} MB)..." -f $AssetName, ($asset.size / 1MB))
-        Invoke-WebRequest $asset.url -OutFile $SetupExe -UserAgent $ua -UseBasicParsing `
-            -Headers @{ 'Accept' = 'application/octet-stream' }
+        $w = (Invoke-RestMethod $Latest -UserAgent $ua -UseBasicParsing).windows
+        if (-not $w -or -not ([string]$w.url).StartsWith($Downloads) -or -not $w.sha256) {
+            throw "latest.json names no Windows Setup on $Downloads."
+        }
+        $SetupExe = Join-Path $tmp 'colourMatik-windows-setup.exe'
+        Write-Host ("==> Downloading colourMatik {0} ({1:N1} MB)..." -f $w.version, ($w.size / 1MB))
+        # "?v=": the server's cache can hold the previous file under the fixed
+        # name for a while; an address per version is always fetched fresh.
+        Invoke-WebRequest ($w.url + '?v=' + $w.version) -OutFile $SetupExe -UserAgent $ua -UseBasicParsing
         $got = (Get-Item $SetupExe).Length
-        if ($got -ne [int64]$asset.size) { throw "The download is incomplete ($got of $($asset.size) bytes)." }
+        if ($got -ne [int64]$w.size) { throw "The download is incomplete ($got of $($w.size) bytes)." }
+        $sha = (Get-FileHash $SetupExe -Algorithm SHA256).Hash
+        if ($sha -ne [string]$w.sha256) { throw "The download does not match latest.json (SHA-256 $sha)." }
     }
     $v = (Get-Item $SetupExe).VersionInfo.ProductVersion
     Write-Host "==> Setup $v (installed: $installed) - unpacking..."

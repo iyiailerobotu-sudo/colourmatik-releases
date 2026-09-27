@@ -394,18 +394,20 @@ def test_frame_cap_and_solver():
 
 
 def test_update_check():
-    """The engine asks GitHub at most once a day (a click: at most every 10
-    minutes), failures included; it picks the highest versioned release for
-    this platform and names itself honestly in the User-Agent."""
-    print("\n=== 9. Update check: once a day, honest client ===")
+    """The engine reads releases.catheadai.com/colourmatik/latest.json (our R2
+    server, not GitHub) at most once a day (a click: at most every 10 minutes),
+    failures included; it takes this platform's entry - only a file on that
+    server - and names itself honestly in the User-Agent."""
+    print("\n=== 9. Update check: R2 latest.json, once a day, honest client ===")
     import json, tempfile, time, urllib.request, urllib.error
     from colourmatik import webapp as W
     d = Path(tempfile.mkdtemp())
-    saved = (W._UPDATE_CACHE, W._fetch_releases, W._release_prefix, W._SLOT_DIR)
-    rel = lambda tag, **kw: {"tag_name": tag, "html_url": "https://example/" + tag, "body": "notes " + tag, **kw}
-    releases = [rel("windows-latest"), rel("darwin-latest"), rel("win-v1.8.2"), rel("mac-v1.8.3"),
-                rel("win-v1.10.0"), rel("win-v1.9.0"), rel("win-v2.0.0", draft=True),
-                rel("win-v1.11.0", prerelease=True), rel("win-v1.12"), rel("win-vX.Y.Z")]
+    saved = (W._UPDATE_CACHE, W._fetch_latest, W._platform_key, W._SLOT_DIR)
+    R2 = "https://releases.catheadai.com/colourmatik/"
+    doc = {"version": "1.9.0",
+           "mac": {"url": R2 + "colourMatik-mac.zip", "size": 5, "sha256": "AB", "version": "1.8.9"},
+           "windows": {"url": R2 + "colourMatik-windows-setup.exe", "size": 7, "sha256": "CD", "version": "1.9.0"},
+           "effect_windows": {"url": R2 + "colourMatik-effect-windows.zip", "size": 1, "sha256": "EF", "version": "1.8.1"}}
     calls = []
     mode = {"reply": "ok"}
 
@@ -415,18 +417,23 @@ def test_update_check():
             raise OSError("offline")
         if mode["reply"] == "304":
             return 304, None, etag
-        return 200, releases, '"etag-1"'
-    W._UPDATE_CACHE, W._fetch_releases, W._SLOT_DIR = d / "update_check.json", fake_fetch, d
-    W._release_prefix = lambda: "win-v"
+        return 200, doc, '"etag-1"'
+    W._UPDATE_CACHE, W._fetch_latest, W._SLOT_DIR = d / "update_check.json", fake_fetch, d
+    W._platform_key = lambda: "windows"
     try:
         def age(seconds):                   # pretend the last check was this long ago
             c = json.loads(W._UPDATE_CACHE.read_text())
             c["checked_at"] = time.time() - seconds
             W._UPDATE_CACHE.write_text(json.dumps(c))
+        # what a 1.8.2 engine left behind (GitHub releases): never reused
+        W._UPDATE_CACHE.write_text(json.dumps({"prefix": "win-v", "checked_at": time.time(),
+                                               "latest": {"version": "1.8.1"}}))
         r = W.update_check()
-        check("first check asks GitHub once", len(calls) == 1 and r["cached"] is False)
-        check("newest = highest published win-v (1.10.0 > 1.9.0 > 1.8.2; drafts, prereleases, "
-              "fixed tags and malformed tags ignored)", r["version"] == "1.10.0", f"(got {r['version']})")
+        check("first check reads latest.json once (a 1.8.2 GitHub cache is not reused)",
+              len(calls) == 1 and r["cached"] is False)
+        check("takes this platform's entry: version, URL, size, SHA-256 (Windows 1.9.0, not the Mac's 1.8.9)",
+              (r["version"], r["url"], r["size"], r["sha256"]) == ("1.9.0", R2 + "colourMatik-windows-setup.exe", 7, "cd"),
+              f"(got {r})")
         W.update_check(); W.update_check(); W.update_check(force=1)
         check("panel opens and a click within 10 minutes use the cache", len(calls) == 1)
         age(11 * 60)
@@ -438,29 +445,37 @@ def test_update_check():
         age(25 * 3600); mode["reply"] = "304"
         r = W.update_check()
         check("after a day the automatic check refreshes; 304 keeps the known release",
-              len(calls) == 3 and r["version"] == "1.10.0" and r["cached"] is False)
+              len(calls) == 3 and r["version"] == "1.9.0" and r["cached"] is False)
         age(25 * 3600); mode["reply"] = "fail"
         r = W.update_check(); W.update_check(); W.update_check()
-        check("a failed check keeps the last known release", r["version"] == "1.10.0" and r["error"])
+        check("a failed check keeps the last known release", r["version"] == "1.9.0" and r["error"])
         check("a failed check is not retried on every panel open", len(calls) == 4)
         W._UPDATE_CACHE.unlink()
         r = W.update_check()
         check("offline with nothing known -> ok:false (panel says 'Check failed')",
               r["ok"] is False and r["version"] is None and len(calls) == 5)
-        W._release_prefix = lambda: "mac-v"; mode["reply"] = "ok"
+        W._platform_key = lambda: "mac"; mode["reply"] = "ok"
         r = W.update_check()
-        check("a Mac engine reads mac-v releases (a win-v cache is not reused)",
-              r["version"] == "1.8.3" and len(calls) == 6)
+        check("a Mac engine reads the mac entry (a Windows cache is not reused)",
+              r["version"] == "1.8.9" and len(calls) == 6)
+        # Only a file on our own server counts, and a broken entry is no update.
+        bad = [{"windows": {**doc["windows"], "url": "https://github.com/x/colourMatik-windows-setup.exe"}},
+               {"windows": {**doc["windows"], "version": "1.9"}}, {"windows": "1.9.0"}, [], None]
+        got = [W._release_for(b, "windows") for b in bad]
+        check("an entry off releases.catheadai.com, a bad version or a malformed file is ignored",
+              got == [None] * len(bad), f"({got})")
+        top = W._release_for({"version": "2.0.1", "windows": {"url": R2 + "a.exe"}}, "windows")
+        check("an entry without its own version takes the top-level one", top and top["version"] == "2.0.1")
     finally:
-        W._UPDATE_CACHE, W._fetch_releases, W._release_prefix, W._SLOT_DIR = saved
+        W._UPDATE_CACHE, W._fetch_latest, W._platform_key, W._SLOT_DIR = saved
 
-    # The real request: official API, honest User-Agent, conditional.
+    # The real request: our server, honest User-Agent, conditional.
     seen = {}
 
     class Resp:
         status = 200
         headers = {"ETag": '"e2"'}
-        def read(self): return b"[]"
+        def read(self): return b"{}"
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
@@ -472,26 +487,25 @@ def test_update_check():
     real = urllib.request.urlopen
     urllib.request.urlopen = fake_urlopen
     try:
-        st, body, etag = W._fetch_releases()
+        st, body, etag = W._fetch_latest()
         ua = seen["headers"].get("user-agent", "")
-        check("asks the GitHub REST API for the releases list",
-              seen["url"].startswith("https://api.github.com/repos/iyiailerobotu-sudo/colourmatik-releases/releases"))
+        check("reads releases.catheadai.com/colourmatik/latest.json (not GitHub)", seen["url"] == R2 + "latest.json")
         check("User-Agent names colourMatik, not a browser",
               ua.startswith("colourMatik-engine/") and "mozilla" not in ua.lower(), f"(UA {ua!r})")
-        check("sends the API's Accept header", seen["headers"].get("accept") == "application/vnd.github+json")
-        st2, body2, etag2 = W._fetch_releases('"e2"')
+        st2, body2, etag2 = W._fetch_latest('"e2"')
         check("304 Not Modified is an answer, not an error", (st, etag, st2, body2, etag2) == (200, '"e2"', 304, None, '"e2"'))
     finally:
         urllib.request.urlopen = real
 
 
 def test_github_policy():
-    """Account-protection rules, enforced on the shipped files: installing never
-    downloads from GitHub (no source archives, no raw files, no git), updates
-    fetch the one release file through the API as application/octet-stream
-    with an honest User-Agent, the panels leave GitHub to the engine, and CI
-    has no scheduled or push-triggered builds."""
-    print("\n=== 10. GitHub usage policy ===")
+    """Download rules, enforced on the shipped files: installing never
+    downloads from GitHub (no source archives, no raw files, no git); updates
+    come from our own server (releases.catheadai.com, R2) - latest.json, then
+    the one installer it names, checked against its size and SHA-256 - with an
+    honest User-Agent and never touch GitHub; the panels leave all of it to the
+    engine; and CI has no scheduled or push-triggered builds."""
+    print("\n=== 10. Download policy: R2, never GitHub at run time ===")
     import re
     root = Path(__file__).resolve().parents[1]
     shipped = ["windows/install-windows.ps1", "windows/install-windows.cmd", "windows/fetch-latest.ps1",
@@ -514,16 +528,23 @@ def test_github_policy():
         hits = [ln.strip() for ln in text.splitlines()
                 if re.search(r"\bgit\s+(-C\s+\S+\s+)?(pull|clone|fetch)\b", ln) and not ln.lstrip().startswith(("#", "rem ", ";"))]
         check(f"{rel_path}: no git pull/clone/fetch", not hits, f"({hits[:2]})")
-    for rel_path, request, own_ua in [("windows/fetch-latest.ps1", r"Invoke-(WebRequest|RestMethod)\b", r"-UserAgent \$ua\b"),
-                                      ("update.command", r"\bcurl\b", r'-A "\$UA"')]:
+    for rel_path, request, own_ua, sha in [
+            ("windows/fetch-latest.ps1", r"Invoke-(WebRequest|RestMethod)\b", r"-UserAgent \$ua\b", "Get-FileHash $SetupExe -Algorithm SHA256"),
+            ("update.command", r"\bcurl\b", r'-A "\$UA"', "shasum -a 256")]:
         text = (root / rel_path).read_text(encoding="utf-8", errors="replace")
         code = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
         requests = [ln.strip() for ln in code if re.search(request, ln)]
-        check(f"{rel_path}: downloads through api.github.com as application/octet-stream",
-              "api.github.com/repos/iyiailerobotu-sudo/colourmatik-releases" in text and "application/octet-stream" in text)
+        check(f"{rel_path}: updates from releases.catheadai.com/colourmatik/latest.json, checking size and SHA-256",
+              "https://releases.catheadai.com/colourmatik/latest.json" in text and sha in text)
+        check(f"{rel_path}: never contacts GitHub", not [ln for ln in code if "github" in ln.lower()])
         check(f"{rel_path}: every request sends its own User-Agent, never a browser's",
               requests and all(re.search(own_ua, ln) for ln in requests) and "colourMatik-updater/" in text
               and not any("mozilla" in ln.lower() for ln in code), f"({len(requests)} requests)")
+    engine = [ln for ln in (root / "colourmatik" / "webapp.py").read_text(encoding="utf-8").splitlines()
+              if not ln.lstrip().startswith("#")]
+    check("engine: its update check reads releases.catheadai.com, never GitHub",
+          any("https://releases.catheadai.com/colourmatik/latest.json" in ln for ln in engine)
+          and not [ln for ln in engine if "github.com" in ln])
     for js in ["colourmatik-uxp/main.js", "colourmatik-cep/client/main.js"]:
         text = (root / js).read_text(encoding="utf-8")
         urls = set(re.findall(r"https?://[A-Za-z0-9.\-]+", text)) - {"http://127.0.0.1", "https://catheadai.com"}
