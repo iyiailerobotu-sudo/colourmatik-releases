@@ -1,7 +1,7 @@
 #!/bin/bash
 # colourMatik macOS installer — launched (as root) by "colourMatik Installer.app".
-# Downloads the latest colourMatik and sets up EVERYTHING: local engine + AI, the
-# Premiere panel, the native effect, and login autostart. Runs headless; the app
+# Downloads the latest colourMatik and sets up EVERYTHING: the local engine, the
+# Premiere + After Effects panels, the native effect, and login autostart. Runs headless; the app
 # shows a live progress bar by reading the PROGRESS file this script writes
 # ("PCT|CAP|message" per stage; "100|100|done" on success, "FAIL|0|reason" on error).
 #
@@ -106,6 +106,10 @@ if [ -d "$FX" ]; then
   /bin/rm -rf "$MC/colourMatik.plugin"
   /usr/bin/ditto "$FX" "$MC/colourMatik.plugin"
   /usr/bin/xattr -dr com.apple.quarantine "$MC/colourMatik.plugin" 2>/dev/null || true
+  # Hand colourMatik's OWN bundle (only it, not the shared folder) to the user:
+  # the panel's one-click updater runs as the user and can then refresh the
+  # effect with no password prompt. Premiere loads it as that same user anyway.
+  /usr/sbin/chown -R "$CONSOLE_USER" "$MC/colourMatik.plugin"
   echo "Effect installed for Premiere (MediaCore)."
   # every installed After Effects version -> its own Plug-Ins/colourMatik/
   # AE gets the distinct-match-name variant so AE doesn't see MediaCore + its own
@@ -118,6 +122,7 @@ if [ -d "$FX" ]; then
     /bin/rm -rf "$AEPLUG/colourMatik/colourMatik.plugin"
     /usr/bin/ditto "$FXAE" "$AEPLUG/colourMatik/colourMatik.plugin"
     /usr/bin/xattr -dr com.apple.quarantine "$AEPLUG/colourMatik" 2>/dev/null || true
+    /usr/sbin/chown -R "$CONSOLE_USER" "$AEPLUG/colourMatik"      # see MediaCore above
     echo "Effect installed for After Effects -> $AEPLUG/colourMatik"
     # remove the deprecated ScriptUI panel from older installs
     /bin/rm -f "$AEAPP/Scripts/ScriptUI Panels/colourMatik.jsx" 2>/dev/null || true
@@ -176,7 +181,10 @@ PL
       ENGINE_OK=1; break
     fi
     [ "$i" = "15" ] && asuser /bin/launchctl kickstart "gui/$USER_UID/com.colourmatik.engine" 2>/dev/null || true
-    [ "$i" = "25" ] && asuser /bin/sh -c "cd '$DIR' && nohup ./.venv/bin/python -u -m colourmatik.webapp >> '$HOME_DIR/Library/Logs/colourmatik-engine.log' 2>&1 &" 2>/dev/null || true
+    # ($DEST / $USER_HOME: this script never defines $DIR or $HOME_DIR, and under
+    # `set -u` referencing them aborted the whole install at this line - a slow
+    # first engine start was reported as "couldn't finish installing")
+    [ "$i" = "25" ] && asuser /bin/sh -c "cd '$DEST' && nohup ./.venv/bin/python -u -m colourmatik.webapp >> '$USER_HOME/Library/Logs/colourmatik-engine.log' 2>&1 &" 2>/dev/null || true
     sleep 2
   done
   if [ -n "$ENGINE_OK" ]; then

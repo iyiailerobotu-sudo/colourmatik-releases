@@ -10,7 +10,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; cd "$ROOT"
 MODE="${1:-unsigned}"
 APPDIR="$ROOT/mac/app"
 APPNAME="colourMatik Installer"
-VER="1.2.0"
+# The app's version is the release's version. It was hard-coded "1.2.0" here,
+# so every rebuilt installer showed 1.2.0 in Finder's Get Info.
+VER="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$ROOT/version.json")"
 APP_IDENTITY="Developer ID Application: Sevki Bugra Ozbek (PCH6L56487)"
 PROFILE="colourmatik"
 

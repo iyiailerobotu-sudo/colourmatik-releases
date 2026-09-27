@@ -1,4 +1,4 @@
--- colourMatik Installer.app — double-click to install colourMatik for Premiere Pro.
+-- colourMatik Installer.app — double-click to install colourMatik for Premiere Pro + After Effects.
 -- Signed with Developer ID Application and notarized, so it opens with no warning.
 -- Asks for the admin password once, then shows a LIVE progress bar (percent + stage)
 -- while the install runs, by reading /tmp/colourMatik-progress ("PCT|CAP|message").
@@ -11,11 +11,11 @@ set myPath to path to me
 set scriptPOSIX to POSIX path of ((myPath as text) & "Contents:Resources:install-mac.sh")
 set progressFile to "/tmp/colourMatik-progress"
 
-set welcome to "Install colourMatik for Premiere Pro?
+set welcome to "Install colourMatik for Premiere Pro and After Effects?
 
-This sets up the local engine + AI, the Premiere panel, and the native effect. Everything runs on your Mac — nothing is uploaded.
+This sets up the local engine, the Premiere and After Effects panels, and the native effect. Everything runs on your Mac — nothing is uploaded.
 
-The AI download is a few GB, so it takes about 10–20 minutes. A progress bar will show exactly where it is."
+It takes a few minutes. A progress bar will show exactly where it is."
 
 try
 	display dialog welcome buttons {"Cancel", "Install"} default button "Install" cancel button "Cancel" with title "colourMatik" with icon note
@@ -102,7 +102,7 @@ on error number -128
 	if sawProgress then
 		display dialog "The installer window was closed, but the install keeps running in the background.
 
-You'll get a notification when it's ready (about 10–20 minutes). Then restart Premiere Pro." buttons {"OK"} default button 1 with title "colourMatik" with icon note
+You'll get a notification when it's ready (a few minutes). Then restart Premiere Pro and After Effects." buttons {"OK"} default button 1 with title "colourMatik" with icon note
 	end if
 	return
 end try
@@ -112,7 +112,9 @@ if doneOK then
 	set progress additional description to "Done  (100%)"
 	display dialog "colourMatik is installed. 🦎
 
-Restart Premiere Pro, then open  Window ▸ UXP Plugins ▸ colourMatik.
+Restart Premiere Pro and After Effects, then open:
+   Premiere Pro:  Window ▸ UXP Plugins ▸ colourMatik
+   After Effects:  Window ▸ Extensions ▸ colourMatik
 
 Pick a reference clip and a target clip, then Match & Apply." buttons {"Great"} default button 1 with title "colourMatik" with icon note
 else if failMsg is not "" then

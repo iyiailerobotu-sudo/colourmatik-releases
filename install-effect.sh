@@ -65,7 +65,9 @@ SUDO=""
 if bundle_current "$SRC" "$DEST"; then
     echo "Effect (Premiere) already current → $DEST"
 else
-    if ! mkdir -p "$DESTDIR" 2>/dev/null || [ ! -w "$DESTDIR" ]; then
+    if [ -d "$DEST" ] && [ -w "$DEST" ]; then
+        :   # our own bundle, handed to this user by the installer: no admin needed
+    elif ! mkdir -p "$DESTDIR" 2>/dev/null || [ ! -w "$DESTDIR" ]; then
         echo "The Adobe plug-ins folder needs admin rights — you'll be asked for your Mac password."
         if [ "$CAN_SUDO" = "1" ]; then SUDO="sudo"; else
           echo "  (skipping: needs admin and no password prompt is possible here)"
@@ -95,7 +97,9 @@ for AEAPP in /Applications/Adobe\ After\ Effects\ *; do
         echo "Effect (After Effects) already current → $AEDEST"
         continue
     fi
-    if [ ! -w "$AEPLUG" ] && [ -z "$SUDO" ]; then
+    if [ -d "$AEPLUG/colourMatik" ] && [ -w "$AEPLUG/colourMatik" ]; then
+        :   # our own folder, handed to this user by the installer: no admin needed
+    elif [ ! -w "$AEPLUG" ] && [ -z "$SUDO" ]; then
         echo "After Effects plug-ins folder needs admin — you may be asked for your password."
         if [ "$CAN_SUDO" = "1" ]; then SUDO="sudo"; else
       echo "  (skipping: needs admin and no password prompt is possible here)"
