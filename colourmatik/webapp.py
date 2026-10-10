@@ -361,7 +361,7 @@ _METHOD_LABELS = {
     "canon": "AI grade (CanonCGT)",
     "neural": "AI scene-match",
     "idt": "distribution (IDT)",
-    "grade": "colorist grade (tone + balance)",
+    "grade": "look transfer (tone + tint)",
     "mkl": "linear (MKL)",
     "lattice": "3D lattice",
     "poly1": "linear fit", "poly2": "polynomial", "poly3": "polynomial",

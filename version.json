@@ -1,5 +1,5 @@
 {
-  "version": "1.8.3",
+  "version": "1.8.4",
   "url": "https://releases.catheadai.com/colourmatik/colourMatik-windows-setup.exe",
-  "notes": "colourMatik 1.8.3 - downloads and updates now come from releases.catheadai.com (our own server) instead of GitHub; the update check still runs at most once a day. The Windows updater logs every step and reports a declined admin prompt at once."
+  "notes": "colourMatik 1.8.4 - a new way of matching two different shots: only the look is carried over (black and white point, tint, saturation), so what is in the picture is no longer read as a colour cast or as exposure - no more purple skies, green faces or blown-out highlights. Shots of the same scene are still matched in full."
 }

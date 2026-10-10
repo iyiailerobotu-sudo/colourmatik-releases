@@ -39,6 +39,9 @@ class MatchResult:
     # decomposition (WB / tone / colour sliders) can be fitted on demand.
     sample_src_lin: np.ndarray | None = None
     sample_tgt_lin: np.ndarray | None = None
+    # What the judge measured on each candidate (name -> naturalness numbers),
+    # for the real-footage evaluation sheets.
+    judge: dict = field(default_factory=dict)
 
 
 def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True,
@@ -172,6 +175,7 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
     Tf_lin = cs.decode(Tf_enc, tf)
 
     weights = None
+    skin_p = None
     if skin_protect:
         skin_p = skin_probability(Sf_enc)
         if skin_p.max() > 0.2:  # only when some skin is actually present
@@ -189,7 +193,7 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
             tf_mod.fit_lut_lattice(Sf_enc, Tf_enc, L=lattice_L, weights=weights), size)
         luts["mkl"] = build_lut(tf_mod.fit_mkl(Sf_lin, Tf_lin), size=size, tf=tf)
         luts["sep"] = build_lut(tf_mod.fit_sep(Sf_lin, Tf_lin), size=size, tf=tf)
-        luts["grade"] = build_lut(tf_mod.fit_grade(Sf_lin, Tf_lin), size=size, tf=tf)
+        luts["grade"] = build_lut(tf_mod.fit_look(Sf_lin, Tf_lin, skin_src=skin_p), size=size, tf=tf)
     else:
         # Different scenes / not aligned: match the colour DISTRIBUTIONS.
         _p(0.10, "Matching colour distributions")
@@ -213,7 +217,7 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
         # Hue-preserving Oklab "colorist" transfer: tone curve + balance + saturation.
         # Cheap (0.2s), so the draft has it too — the draft and the final then
         # agree whenever the full contest also lands on it.
-        luts["grade"] = build_lut(tf_mod.fit_grade(Sf_lin, Tf_lin), size=size, tf=tf)
+        luts["grade"] = build_lut(tf_mod.fit_look(Sf_lin, Tf_lin, skin_src=skin_p), size=size, tf=tf)
         # How alike are the two pictures' colour worlds? Exact-distribution
         # transport (IDT) is a superb match between shots of the same kind of
         # content and a wrecking ball between unrelated ones: on real footage
@@ -391,7 +395,8 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
         m = _naturalness(nat, luts[name], tf)
         pen *= 1.0 + 0.8 * max(0.0, m["detail"] - 1.5)
         pen *= 1.0 + 4.0 * max(0.0, m["clip_inc"] - 0.01)
-        pen *= 1.0 + 0.05 * max(0.0, m["twist"] - 20.0)
+        if not corresponded:      # aligned frames ARE the evidence for a hue change
+            pen *= 1.0 + 0.05 * max(0.0, m["twist"] - 20.0)
         pen *= 1.0 + 0.5 * max(0.0, m["nspread"] - 2.0)
         pen *= 1.0 + 0.3 * max(0.0, m["uneven"] - 3.5)
         pen *= 1.0 + 4.0 * max(0.0, m["smooth"] - 1.8)
@@ -402,8 +407,9 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
     # wrecking the picture — no proportional penalty is safe against that. Past
     # these limits the damage is unmistakable to any viewer, so such a candidate
     # is out of the running whenever a clean one exists.
+    twist_max = 1e9 if corresponded else 30.0
     clean = [n for n in scores
-             if penalties[n][1]["twist"] <= 40.0 and penalties[n][1]["detail"] <= 3.0
+             if penalties[n][1]["twist"] <= twist_max and penalties[n][1]["detail"] <= 3.0
              and penalties[n][1]["clip_inc"] <= 0.15 and penalties[n][1]["nspread"] <= 4.0
              and penalties[n][1]["uneven"] <= 8.0]
     if clean:
@@ -417,21 +423,37 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
         # LEAST damaging candidate instead.
         ranked = sorted(scores, key=lambda n: penalties[n][0])
         best = ranked[0]
-    # Incumbent rule: the hue-preserving grade is the one candidate that cannot
-    # scramble a picture, so an exact-transport map (idt / flow / uot) has to
-    # BEAT it clearly — 25% lower score, penalties included — to ship. Where
-    # IDT genuinely belongs (two shots of one set) it scores 2-5x lower than
-    # the grade, not 1.3x; the near-ties are exactly the pairs where its extra
-    # "accuracy" is the reference's content forced onto the wrong objects
-    # (the live engine crowned it at 0.48 vs 0.67 on the lamp pair, hue twist
-    # 48 deg — the lamp went white-green; the limits were set from that).
-    if ("grade" in ranked and best in ("idt", "flow", "uot")
+    # Are the two shots alike? Matching colour STATISTICS (mkl / sep / idt /
+    # flow / uot) is right when both show the same kind of thing, and wrong when
+    # they do not: what is IN the picture then gets read as a colour cast and as
+    # exposure (grass against a night street = purple sky, a selfie against a
+    # dim classroom = green dark face). The look transfer ("grade") carries
+    # every colour along unrotated and copies only black point, white point,
+    # tint and saturation, so how far the statistics candidates move away from
+    # it IS the likeness test. On 31 real pairs they stayed within 23 degrees
+    # of hue and 8 lightness points of it whenever the shots were alike; on
+    # unlike shots at least one of them went past 30 degrees or 12 points. That
+    # is decided for the PAIR, not per candidate: where the exact transport has
+    # to turn hues by 38 degrees, a tamer candidate that passes at 18 is still
+    # matching statistics that do not correspond (it shipped a maroon night
+    # sky). Not applied to aligned frames, where the pixels themselves are the
+    # evidence.
+    stat = [n for n in scores if n != "grade"]
+    alike = corresponded or "grade" not in scores or all(
+        penalties[n][1]["twist"] <= 30.0 and penalties[n][1]["tone"] <= 12.0 for n in stat)
+    if not alike:
+        best = "grade"
+    # Incumbent rule: even on alike shots a statistics candidate has to beat
+    # the look clearly (25% lower score, penalties included) to ship. Where
+    # statistics matching belongs it scores 2-5x lower, not 1.3x.
+    elif (not corresponded and "grade" in ranked and best != "grade"
             and scores[best] > 0.75 * scores["grade"]):
         best = "grade"
     res = MatchResult(method=best, scores=scores, lut=luts[best], tf=tf,
                       corresponded=corresponded, score_metric=metric)
     if _gate_note:
         res.notes.append(_gate_note)
+    res.judge = {n: dict(penalties[n][1], pen=penalties[n][0]) for n in penalties}
     _pm = penalties[best][1]
     res.notes.append(f"naturalness of the chosen look: contrast x{_pm['detail']:.2f}, "
                      f"hue twist {_pm['twist']:.0f} deg, new clipping "
@@ -556,9 +578,10 @@ def _naturalness_probe(src_enc: np.ndarray, tf: str,
     flat = img.reshape(-1, 3)
     ok = cs.encoded_to_oklab(flat, tf)
     C = np.hypot(ok[:, 1], ok[:, 2])
-    ref_ab = None
+    ref_ab = ref_L = None
     if hue_ref_lut is not None:
-        ref_ab = cs.encoded_to_oklab(apply_lut(img, hue_ref_lut).reshape(-1, 3), tf)[:, 1:]
+        ref_ok = cs.encoded_to_oklab(apply_lut(img, hue_ref_lut).reshape(-1, 3), tf)
+        ref_ab, ref_L = ref_ok[:, 1:], ref_ok[:, 0]
     # the smoothest 30% of the picture in Oklab (skies, walls, skin): where
     # banding and hue arcs show first
     g_in = _oklab_gradient(ok.reshape(img.shape[0], img.shape[1], 3) * 100.0)
@@ -570,6 +593,7 @@ def _naturalness_probe(src_enc: np.ndarray, tf: str,
         "clip": float(np.mean((luma <= 2 / 255) | (luma >= 253 / 255))),
         "ab": ok[:, 1:],
         "ref_ab": ref_ab,
+        "ref_L": ref_L,
         "chroma": C,
         "chromatic": C > 0.05,
         "neutral": C < 0.02,
@@ -611,7 +635,11 @@ def _naturalness(probe: dict, lut: np.ndarray, tf: str) -> dict:
     lap_out = laplace(luma)
     m = {"detail": float(np.std(lap_out)) / probe["lap"],
          "clip_inc": float(np.mean((luma <= 2 / 255) | (luma >= 253 / 255))) - probe["clip"],
-         "twist": 0.0, "nspread": 0.0, "uneven": 1.0, "smooth": 1.0}
+         "twist": 0.0, "nspread": 0.0, "uneven": 1.0, "smooth": 1.0, "tone": 0.0}
+    if probe.get("ref_L") is not None:
+        dL = np.abs(ok[:, 0] - probe["ref_L"]) * 100.0
+        m["tone"] = float(dL.mean())
+        m["tone90"] = float(np.percentile(dL, 90))
     # Smooth-region damage: how much rougher (in Oklab, so banding and hue
     # arcs both count) the candidate renders the regions the source keeps
     # smooth. Field pair (a no-sky wheat close-up as reference for a wide shot

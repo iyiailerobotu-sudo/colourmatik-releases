@@ -6,7 +6,8 @@ full of green screens, a flat sky stretched into a banded blob, green blotches
 on a sweater from a green-screen prop). This renders, for every (source,
 reference) pair, one sheet: REFERENCE | SOURCE | SHIPPED (the engine's actual
 choice) | DRAFT (quick mode) | every candidate, each with the judge's numbers
-(distribution distance, steepness, clipping, hue twist, neutral spread, local
+(distribution distance, steepness, clipping, hue twist and tone change against
+the look transfer, neutral spread, local
 contrast ratio) so a bad decision can be spotted by eye and by number.
 
 usage:
@@ -52,7 +53,7 @@ def _candidates(src, ref, seed=0, sample=300_000):
     Sf_lin, Sf_enc, Tf_lin = S_lin[idx], S_enc[idx], T_lin[tidx]
     luts = {"mkl": build_lut(tf_mod.fit_mkl(Sf_lin, Tf_lin), size=65, tf=TF),
             "sep": build_lut(tf_mod.fit_sep(Sf_lin, Tf_lin), size=65, tf=TF),
-            "grade": build_lut(tf_mod.fit_grade(Sf_lin, Tf_lin), size=65, tf=TF)}
+            "grade": build_lut(tf_mod.fit_look(Sf_lin, Tf_lin), size=65, tf=TF)}
     cap = 150_000
     sel = rng.choice(Sf_lin.shape[0], cap, replace=False) if Sf_lin.shape[0] > cap else np.arange(Sf_lin.shape[0])
     tsel = rng.choice(Tf_lin.shape[0], cap, replace=False) if Tf_lin.shape[0] > cap else np.arange(Tf_lin.shape[0])
@@ -86,7 +87,7 @@ def run_pair(clips, si, ri, st, rt, mode, out_dir):
     def describe(lut, extra):
         out = apply_lut(src, lut)
         m = _naturalness(probe, lut, TF)
-        return out, [f"sw {_sw(out, ref):.2f} steep {lut_steepness(lut):.1f} clip+{m['clip_inc']*100:.1f}% twist {m['twist']:.0f} nspread {m['nspread']:.1f}",
+        return out, [f"sw {_sw(out, ref):.2f} steep {lut_steepness(lut):.1f} clip+{m['clip_inc']*100:.1f}% twist {m['twist']:.0f} tone {m.get('tone', 0.0):.1f} nspread {m['nspread']:.1f}",
                      f"detail {m['detail']:.2f} smooth {m['smooth']:.2f} {extra}"]
     panels = [_panel(ref, "REFERENCE", [""]), _panel(src, "SOURCE", [f"src->ref sw {_sw(src, ref):.2f}"])]
     rows = [("SHIPPED", res.lut, f"{res.method} {t_full:.1f}s"), ("DRAFT (quick)", resq.lut, f"{resq.method} {t_quick:.1f}s")]

@@ -297,6 +297,112 @@ def test_robustness():
 
 
 
+def test_look_transfer():
+    """Different-scene matching must not read what is IN the picture as a colour
+    cast or as exposure. Each case is a field failure of 1.8.3 reduced to a
+    synthetic pair: grass and sky against a night street (purple sky), a bright
+    face against a frame full of dark clothes (dark green face), a hand against
+    an all-blue aerial (blue hand), a moon above a dusk sky against a sunset (a
+    white disc), a smoke element on black against a daylight plate (grey fog)."""
+    print("\n=== 12. Look transfer: content is not a cast, nor exposure ===")
+    from colourmatik.colorspace import encoded_to_oklab
+    rng = np.random.default_rng(11)
+    h, w = 240, 360
+    y, x = np.mgrid[0:h, 0:w].astype(np.float64)
+
+    def noisy(img, s=0.012):
+        return np.clip(img + rng.normal(0, s, img.shape), 0.0, 1.0)
+
+    def hue_move(a, b, mask):
+        oa, ob = encoded_to_oklab(a[mask].mean(0)), encoded_to_oklab(b[mask].mean(0))
+        d = np.degrees(np.arctan2(ob[2], ob[1]) - np.arctan2(oa[2], oa[1]))
+        return abs((d + 180) % 360 - 180), float(np.hypot(ob[1], ob[2]) / max(np.hypot(oa[1], oa[2]), 1e-9))
+
+    # 1) grass + blue sky -> a dark street under orange lamps
+    src = np.empty((h, w, 3))
+    sky = y < 110
+    src[sky] = np.stack([0.42 + 0.10 * y / h, 0.62 + 0.08 * y / h, 0.90 - 0.05 * y / h], -1)[sky]
+    src[~sky] = np.array([0.30, 0.58, 0.16]) * (0.75 + 0.5 * rng.random((h, w, 1)))[~sky]
+    src = noisy(src)
+    night = np.repeat((0.04 + 0.16 * rng.random((h, w, 1))), 3, axis=2) * np.array([1.08, 1.0, 0.9])
+    for cy, cx in ((60, 80), (70, 250), (150, 170)):
+        glow = np.exp(-(((y - cy) ** 2 + (x - cx) ** 2) / (2 * 28.0 ** 2)))[..., None]
+        night = night + glow * np.array([0.85, 0.5, 0.12])
+    night = noisy(night)
+    res = match(src, night, corresponded=False, size=33)
+    out = apply_lut(src, res.lut)
+    d_sky, _ = hue_move(src, out, sky)
+    d_grass, _ = hue_move(src, out, ~sky)
+    check("grass+sky vs night street: the sky stays blue", d_sky < 20, f"(hue moved {d_sky:.0f} deg, chose {res.method})")
+    check("grass+sky vs night street: the grass stays green", d_grass < 20, f"(hue moved {d_grass:.0f} deg)")
+    check("unlike shots ship the look transfer", res.method == "grade", f"(chose {res.method})")
+
+    # 2) a cast on the reference's neutrals IS the look, and is carried over
+    a, b = _scene(rng), _scene(rng)
+    cool = np.clip(b * np.array([0.90, 1.0, 1.12]), 0, 1)
+    res = match(a, cool, corresponded=False, size=33)
+    grey = np.repeat(np.linspace(0.25, 0.8, 64)[:, None], 3, axis=1)
+    ob = encoded_to_oklab(apply_lut(grey[None], res.lut)[0])[:, 2].mean()
+    tb = (encoded_to_oklab(np.clip(grey * np.array([0.90, 1.0, 1.12]), 0, 1))[:, 2]).mean()
+    check("a cool reference cools the neutrals", ob < 0.4 * tb, f"(greys moved {ob:+.4f} in Oklab b, reference cast {tb:+.4f}, chose {res.method})")
+
+    # 3) a reference full of dark clothes does not drag a bright shot into the dark
+    bright = noisy(np.clip(0.45 + 0.5 * _scene(rng), 0, 1))
+    clothes = _scene(rng)
+    dark = rng.random((h, w)) < 0.62
+    clothes[dark] = (0.03 + 0.06 * rng.random((h, w, 1)))[dark] * np.array([0.9, 1.0, 0.95])
+    res = match(bright, noisy(clothes), corresponded=False, size=33)
+    out = apply_lut(bright, res.lut)
+    ms, mo, mr = (float(np.median(encoded_to_oklab(v.reshape(-1, 3))[:, 0])) for v in (bright, out, clothes))
+    check("dark clothes in the reference are not exposure: midtones go at most part of the way",
+          mo >= mr + 0.35 * (ms - mr), f"(median lightness {ms:.2f} -> {mo:.2f}, reference {mr:.2f}, chose {res.method})")
+
+    # 4) a hand against an all-blue aerial: skin keeps its hue and its colour
+    hand = np.repeat(0.35 + 0.3 * (x / w)[..., None], 3, axis=2)
+    skin = ((y - 130) ** 2 / 1.5 + (x - 200) ** 2) < 70 ** 2
+    hand[skin] = np.array([0.80, 0.56, 0.44]) * (0.8 + 0.3 * rng.random((h, w, 1)))[skin]
+    hand = noisy(hand)
+    aerial = noisy(np.stack([0.05 + 0.10 * y / h, 0.25 + 0.15 * y / h, 0.55 + 0.20 * y / h], -1))
+    res = match(hand, aerial, corresponded=False, size=33)
+    out = apply_lut(hand, res.lut)
+    d_skin, c_skin = hue_move(hand, out, skin)
+    check("skin against an all-blue reference keeps its hue", d_skin < 18, f"(hue moved {d_skin:.0f} deg, chose {res.method})")
+    check("skin against an all-blue reference keeps its colour", c_skin > 0.5, f"(chroma x{c_skin:.2f})")
+
+    # 5) the brightest thing in the frame is not pushed past white
+    dusk = np.stack([0.10 + 0.10 * y / h, 0.22 + 0.12 * y / h, 0.45 + 0.10 * y / h], -1)
+    jet = (np.abs(y - 150) < 22) & (np.abs(x - 190) < 120)
+    dusk[jet] = np.array([0.33, 0.35, 0.37]) * (0.6 + 0.6 * rng.random((h, w, 1)))[jet]
+    moon = ((y - 50) ** 2 + (x - 250) ** 2) < 9 ** 2          # 0.3% of the frame
+    dusk[moon] = [0.95, 0.62, 0.22]
+    dusk = noisy(dusk, 0.006)
+    sun = np.stack([0.85 - 0.35 * y / h, 0.55 - 0.3 * y / h, 0.18 - 0.1 * y / h], -1)
+    sun = np.clip(sun + np.exp(-(((y - 90) ** 2 + (x - 240) ** 2) / (2 * 45.0 ** 2)))[..., None], 0, 1)
+    sun[y > 170] *= 0.15                                       # a dark foreground
+    res = match(dusk, noisy(sun), corresponded=False, size=33)
+    out = apply_lut(dusk, res.lut)
+    _, c_moon = hue_move(dusk, out, moon)
+    check("an orange moon is not turned into a white disc", c_moon > 0.4 and out[moon].mean(0).min() < 0.9,
+          f"(chroma x{c_moon:.2f}, rgb {np.round(out[moon].mean(0), 2)}, chose {res.method})")
+
+    # 6) a smoke element on black against a daylight plate: black is not fog
+    elem = np.zeros((h, w, 3))
+    puff = np.exp(-(((y - 130) ** 2 + (x - 180) ** 2) / (2 * 38.0 ** 2)))
+    elem += (puff * (puff > 0.25))[..., None] * np.array([0.42, 0.40, 0.36])
+    elem = np.clip(elem + np.abs(rng.normal(0, 0.003, elem.shape)), 0, 1)
+    plate = noisy(np.clip(0.3 + 0.75 * _scene(rng), 0, 1))
+    plate[:8] = 0.02                                           # the plate does hold a true black
+    res = match(elem, plate, corresponded=False, size=33)
+    out = apply_lut(elem, res.lut)
+    bg = float(np.median(out[puff < 0.05]))
+    check("black behind a smoke element stays dark", bg < 0.12, f"(background {bg:.3f}, chose {res.method})")
+
+    # 7) alike shots are still matched in full: same set, another grade
+    ref = synth.build_reference()
+    res = match(synth.distort_nonlinear(ref), ref, corresponded=False, size=33)
+    check("alike shots still get full distribution matching", res.method != "grade", f"(chose {res.method})")
+
+
 def test_slot_retention():
     """A saved project points at slot numbers and the effect renders identity when
     the file is gone - so garbage collection may only remove what no project can
@@ -782,6 +888,7 @@ if __name__ == "__main__":
     test_update_check()
     test_github_policy()
     test_windows_update_log()
+    test_look_transfer()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")
