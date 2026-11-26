@@ -588,6 +588,11 @@ def test_bundled_runtime():
     ps = rd("windows/setup.ps1")
     check("setup.ps1 never rebuilds .venv under a running engine",
           "$running" in ps and ps.index("if (-not $running)") < ps.index("-m venv --system-site-packages .venv.new"))
+    import re as _re
+    bare = [l for l in ps.splitlines() if _re.search(r"& \$\w*[Pp]y\w* (-W ignore )?-c", l) and "Invoke-Py" not in l
+            and not l.lstrip().startswith("try { & $py -W ignore -c $code")]
+    check("setup.ps1 runs Python checks through Invoke-Py (PowerShell 5.1 makes stderr fatal)",
+          "function Invoke-Py" in ps and not bare, f"({bare})")
     check("setup.ps1 swaps by renaming (a folder in use cannot be renamed, so nothing changes)",
           'Rename-Item ".venv" ".venv.old"' in ps and 'Rename-Item ".venv.new" ".venv"' in ps)
     inst = rd("mac/app/install-mac.sh")

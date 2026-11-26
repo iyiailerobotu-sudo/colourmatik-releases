@@ -16,9 +16,19 @@ Set-Location $Root
 # is checked as it is first loaded): one tiny match here, under Setup's
 # progress bar, instead of in the user's first match.
 $warm = "import numpy as np, subprocess, imageio_ffmpeg, cv2; import colourmatik.webapp; from colourmatik.match import match; r = np.random.default_rng(0); match(r.random((48, 64, 3)), r.random((48, 64, 3)), corresponded=False, size=17); subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-version'], capture_output=True)"
+# Run Python and only look at its exit code. Windows PowerShell 5.1 turns
+# anything a program writes to stderr into a terminating error while
+# $ErrorActionPreference is "Stop" - even with 2>$null - and colour-science
+# warns about matplotlib on every import: the runner test died right here.
+function Invoke-Py($py, $code) {
+    $old = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    try { & $py -W ignore -c $code 2>&1 | Out-Null; return ($LASTEXITCODE -eq 0) }
+    catch { return $false }
+    finally { $ErrorActionPreference = $old }
+}
 function Warm-Up($py) {
     Write-Host "==> Preparing the engine (first run)"
-    try { & $py -c $warm 2>$null | Out-Null } catch {}
+    $null = Invoke-Py $py $warm
 }
 
 $rtPy = Join-Path $Root "runtime\python.exe"
@@ -29,7 +39,7 @@ if (Test-Path $rtPy) {
     $have = ((Get-Content ".venv\RUNTIME_ID" -Raw -ErrorAction SilentlyContinue) + "").Trim()
     $venvPy = ".\.venv\Scripts\python.exe"
     $ready = $false
-    if ($want -eq $have -and (Test-Path $venvPy)) { & $venvPy -c $imports 2>$null; $ready = ($LASTEXITCODE -eq 0) }
+    if ($want -eq $have -and (Test-Path $venvPy)) { $ready = Invoke-Py $venvPy $imports }
     if ($ready) { Write-Host "==> Engine environment ready (bundled runtime $want)."; Warm-Up $venvPy; return }
     $running = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
                  Where-Object { $_.CommandLine -match "colourmatik.webapp" }).Count -gt 0
@@ -44,8 +54,7 @@ if (Test-Path $rtPy) {
         foreach ($d in @(".venv.new", ".venv.old")) { if (Test-Path $d) { Remove-Item $d -Recurse -Force } }
         & $rtPy -m venv --system-site-packages .venv.new
         if ($LASTEXITCODE -ne 0) { throw "Could not create the engine environment on the bundled runtime." }
-        & ".\.venv.new\Scripts\python.exe" -c $imports
-        if ($LASTEXITCODE -ne 0) {
+        if (-not (Invoke-Py ".\.venv.new\Scripts\python.exe" $imports)) {
             Remove-Item ".venv.new" -Recurse -Force -ErrorAction SilentlyContinue
             throw "The engine environment on the bundled runtime does not start."
         }
@@ -113,7 +122,6 @@ Write-Host "    (First AI run also auto-downloads the SegFormer scene model, ~15
 # Prove the environment can actually start before declaring success — a silent
 # pip failure used to leave a machine the installer called "complete" and the
 # panel could never connect to.
-& $python -c "import fastapi, numpy, cv2" 2>$null
-if ($LASTEXITCODE -ne 0) { throw "The engine environment is incomplete (a dependency is missing)." }
+if (-not (Invoke-Py $python "import fastapi, numpy, cv2")) { throw "The engine environment is incomplete (a dependency is missing)." }
 Write-Host "==> Engine environment verified."
 Warm-Up $python
