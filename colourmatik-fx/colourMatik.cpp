@@ -5,7 +5,12 @@
 	Premiere Pro: renders in 32-bit float BGRA (declared via the Premiere pixel
 	format suite; 8-bit BGRA fallback), so the engine's 65^3 LUT is applied with
 	zero quantisation — the clip gets exactly what the engine computed.
-	After Effects: classic 8-bit ARGB path via PF_ITERATE.
+	After Effects (CM_AE_BUILD): a SmartFX effect rendering at the project's own
+	depth - 8, 16 or 32 bits per channel - with the iterate suites. Before 1.2 it
+	was 8-bit only, so AE squeezed every 16/32-bit project down to 8 bits for it
+	(banding in skies, clipped highlights). The engine's LUT expects Rec.709 /
+	sRGB-encoded values; in a linearised working space ("Linear Working Space",
+	set by the panel from the project) pixels are encoded first and decoded after.
 */
 
 #include "colourMatik.h"
@@ -222,6 +227,128 @@ static PF_Err cm_pixel(void *refcon, A_long x, A_long y, PF_Pixel *inP, PF_Pixel
 	return PF_Err_NONE;
 }
 
+#ifdef CM_AE_BUILD
+// ------------------------------------------------------------ AE deep colour
+typedef struct { const float *lut; int size; float t; int linear; } CM_AEInfo;
+
+// sRGB transfer (the engine's "Standard (Rec.709 / sRGB)" encoding), for a
+// linearised working space. Below the toe both are linear, so negative and tiny
+// values pass straight through; above white the power law carries on.
+static inline float cm_enc(float v) { return v <= 0.0031308f ? v * 12.92f : 1.055f * powf(v, 1.0f / 2.4f) - 0.055f; }
+static inline float cm_dec(float v) { return v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f); }
+
+// One pixel in encoded floats: sample at the clamped point, blend from it, so
+// over-range values (superwhites in 32-bit) keep their offset - same rule as the
+// Premiere float path.
+static inline void cm_ae_apply(const CM_AEInfo *info, float r, float g, float b, float o[3]) {
+	if (info->linear) { r = cm_enc(r); g = cm_enc(g); b = cm_enc(b); }
+	if (info->lut) {
+		float rc = cm_clampf(r), gc = cm_clampf(g), bc = cm_clampf(b), s[3];
+		cm_sample(info->lut, info->size, rc, gc, bc, s);
+		r += info->t * (s[0] - rc); g += info->t * (s[1] - gc); b += info->t * (s[2] - bc);
+	}
+	if (info->linear) { r = cm_dec(r); g = cm_dec(g); b = cm_dec(b); }
+	o[0] = r; o[1] = g; o[2] = b;
+}
+
+static PF_Err cm_ae_pix8(void *refcon, A_long x, A_long y, PF_Pixel8 *inP, PF_Pixel8 *outP) {
+	const CM_AEInfo *info = (const CM_AEInfo *)refcon;
+	float d = cm_hash_noise(x, y) / 255.f;   // anti-banding input jitter, as before
+	float o[3];
+	cm_ae_apply(info, cm_clampf(inP->red / 255.f + d), cm_clampf(inP->green / 255.f + d),
+	            cm_clampf(inP->blue / 255.f + d), o);
+	outP->alpha = inP->alpha;
+	outP->red   = (A_u_char)(cm_clampf(o[0]) * 255.f + 0.5f);
+	outP->green = (A_u_char)(cm_clampf(o[1]) * 255.f + 0.5f);
+	outP->blue  = (A_u_char)(cm_clampf(o[2]) * 255.f + 0.5f);
+	return PF_Err_NONE;
+}
+
+static PF_Err cm_ae_pix16(void *refcon, A_long x, A_long y, PF_Pixel16 *inP, PF_Pixel16 *outP) {
+	const CM_AEInfo *info = (const CM_AEInfo *)refcon;
+	const float k = 1.f / PF_MAX_CHAN16;      // AE's 16-bit white is 32768
+	float o[3];
+	cm_ae_apply(info, inP->red * k, inP->green * k, inP->blue * k, o);
+	outP->alpha = inP->alpha;
+	outP->red   = (A_u_short)(cm_clampf(o[0]) * PF_MAX_CHAN16 + 0.5f);
+	outP->green = (A_u_short)(cm_clampf(o[1]) * PF_MAX_CHAN16 + 0.5f);
+	outP->blue  = (A_u_short)(cm_clampf(o[2]) * PF_MAX_CHAN16 + 0.5f);
+	return PF_Err_NONE;
+}
+
+static PF_Err cm_ae_pixf(void *refcon, A_long x, A_long y, PF_PixelFloat *inP, PF_PixelFloat *outP) {
+	const CM_AEInfo *info = (const CM_AEInfo *)refcon;
+	float o[3];
+	cm_ae_apply(info, inP->red, inP->green, inP->blue, o);
+	outP->alpha = inP->alpha;
+	outP->red = o[0]; outP->green = o[1]; outP->blue = o[2];   // 32-bit: no clamp
+	return PF_Err_NONE;
+}
+
+static PF_Err PreRender(PF_InData *in_data, PF_OutData *out_data, PF_PreRenderExtra *extra) {
+	PF_Err err = PF_Err_NONE;
+	PF_RenderRequest req = extra->input->output_request;
+	req.preserve_rgb_of_zero_alpha = TRUE;    // a colour operation: never invent RGB under A=0
+	PF_CheckoutResult in_result;
+	AEFX_CLR_STRUCT(in_result);
+	ERR(extra->cb->checkout_layer(in_data->effect_ref, CM_INPUT, CM_INPUT, &req,
+	                              in_data->current_time, in_data->time_step, in_data->time_scale, &in_result));
+	if (!err) {
+		extra->output->result_rect = in_result.result_rect;
+		extra->output->max_result_rect = in_result.max_result_rect;
+		extra->output->solid = in_result.solid;
+	}
+	return err;
+}
+
+static PF_Err SmartRender(PF_InData *in_data, PF_OutData *out_data, PF_SmartRenderExtra *extra) {
+	PF_Err err = PF_Err_NONE, err2 = PF_Err_NONE;
+	PF_ParamDef p_int, p_slot, p_lin;
+	AEFX_CLR_STRUCT(p_int); AEFX_CLR_STRUCT(p_slot); AEFX_CLR_STRUCT(p_lin);
+	PF_EffectWorld *input = NULL, *output = NULL;
+	ERR(PF_CHECKOUT_PARAM(in_data, CM_INTENSITY, in_data->current_time, in_data->time_step, in_data->time_scale, &p_int));
+	ERR(PF_CHECKOUT_PARAM(in_data, CM_SLOT, in_data->current_time, in_data->time_step, in_data->time_scale, &p_slot));
+	ERR(PF_CHECKOUT_PARAM(in_data, CM_LINEAR, in_data->current_time, in_data->time_step, in_data->time_scale, &p_lin));
+	ERR(extra->cb->checkout_layer_pixels(in_data->effect_ref, CM_INPUT, &input));
+	ERR(extra->cb->checkout_output(in_data->effect_ref, &output));
+	if (!err && input && output) {
+		CM_AEInfo info;
+		info.t = (float)(p_int.u.fs_d.value / 100.0);
+		info.linear = p_lin.u.bd.value ? 1 : 0;
+		info.lut = NULL; info.size = 0;
+		A_long slot = (A_long)(p_slot.u.fs_d.value + 0.5);
+		const float *lut = NULL; int lut_size = 0;
+		if (info.t != 0.f && cm_get_lut(slot, &lut, &lut_size) && lut_size >= 2) { info.lut = lut; info.size = lut_size; }
+		int depth = extra->input->bitdepth;
+		cm_trace("AE smart render slot=%ld size=%d bpc=%d linear=%d t=%.2f", (long)slot, info.size, depth, info.linear, info.t);
+		SPBasicSuite *bs = in_data->pica_basicP;
+		if (depth == 32) {
+			PF_IterateFloatSuite2 *it = NULL;
+			if (bs->AcquireSuite(kPFIterateFloatSuite, kPFIterateFloatSuiteVersion2, (const void **)&it) == kSPNoError && it) {
+				err = it->iterate(in_data, 0, output->height, input, NULL, (void *)&info, cm_ae_pixf, output);
+				bs->ReleaseSuite(kPFIterateFloatSuite, kPFIterateFloatSuiteVersion2);
+			} else err = PF_Err_BAD_CALLBACK_PARAM;
+		} else if (depth == 16) {
+			PF_iterate16Suite2 *it = NULL;
+			if (bs->AcquireSuite(kPFIterate16Suite, kPFIterate16SuiteVersion2, (const void **)&it) == kSPNoError && it) {
+				err = it->iterate(in_data, 0, output->height, input, NULL, (void *)&info, cm_ae_pix16, output);
+				bs->ReleaseSuite(kPFIterate16Suite, kPFIterate16SuiteVersion2);
+			} else err = PF_Err_BAD_CALLBACK_PARAM;
+		} else {
+			PF_Iterate8Suite2 *it = NULL;
+			if (bs->AcquireSuite(kPFIterate8Suite, kPFIterate8SuiteVersion2, (const void **)&it) == kSPNoError && it) {
+				err = it->iterate(in_data, 0, output->height, input, NULL, (void *)&info, cm_ae_pix8, output);
+				bs->ReleaseSuite(kPFIterate8Suite, kPFIterate8SuiteVersion2);
+			} else err = PF_Err_BAD_CALLBACK_PARAM;
+		}
+	}
+	ERR2(PF_CHECKIN_PARAM(in_data, &p_int));
+	ERR2(PF_CHECKIN_PARAM(in_data, &p_slot));
+	ERR2(PF_CHECKIN_PARAM(in_data, &p_lin));
+	return err;
+}
+#endif  // CM_AE_BUILD
+
 // ------------------------------------------------------------ Premiere BGRA paths
 // Row loops over the effect worlds; memory order is B,G,R,A per pixel.
 // IMPORTANT: honour the host's abort callback every few rows. Premiere cancels
@@ -325,6 +452,11 @@ static PF_Err GlobalSetup(PF_InData *in_data, PF_OutData *out_data, PF_ParamDef 
 	// hold no sequence data, so SEQUENCE_DATA_NEEDS_FLATTENING / flattening callbacks
 	// are irrelevant.
 	out_data->out_flags2 |= PF_OutFlag2_SUPPORTS_THREADED_RENDERING;
+#ifdef CM_AE_BUILD
+	// After Effects: render at the project's depth (must match the PiPL)
+	out_data->out_flags  |= PF_OutFlag_DEEP_COLOR_AWARE;
+	out_data->out_flags2 |= PF_OutFlag2_SUPPORTS_SMART_RENDER | PF_OutFlag2_FLOAT_COLOR_AWARE;
+#endif
 
 	// Premiere: declare high-precision pixel formats (float preferred, 8-bit fallback).
 	if (in_data->appl_id == kAppID_Premiere && in_data->pica_basicP) {
@@ -351,6 +483,13 @@ static PF_Err ParamsSetup(PF_InData *in_data, PF_OutData *out_data, PF_ParamDef 
 	AEFX_CLR_STRUCT(def);
 	PF_ADD_FLOAT_SLIDERX("Match Slot", CM_SLOT_MIN, CM_SLOT_MAX, CM_SLOT_MIN,
 		CM_SLOT_MAX, CM_SLOT_DFLT, PF_Precision_INTEGER, 0, 0, CM_SLOT_DISK_ID);
+
+#ifdef CM_AE_BUILD
+	// The engine's LUT expects Rec.709 / sRGB-encoded values. The panel ticks this
+	// from the project's "Linearize Working Space" when it applies the effect.
+	AEFX_CLR_STRUCT(def);
+	PF_ADD_CHECKBOXX("Linear Working Space", FALSE, 0, CM_LINEAR_DISK_ID);
+#endif
 
 	out_data->num_params = CM_NUM_PARAMS;
 	return PF_Err_NONE;
@@ -509,7 +648,7 @@ PF_Err PluginDataEntryFunction2(
 	result = PF_REGISTER_EFFECT_EXT2(
 		inPtr, inPluginDataCallBackPtr,
 		"colourMatik",              // Name (shows in Effects panel)
-		"catheadai colourMatik",    // Match Name (unique id)
+		CM_MATCH_NAME,              // Match Name (unique id; the AE build has its own)
 		"colourMatik",              // Category
 		AE_RESERVED_INFO,
 		"EffectMain",
@@ -517,7 +656,7 @@ PF_Err PluginDataEntryFunction2(
 	return result;
 }
 
-PF_Err EffectMain(PF_Cmd cmd, PF_InData *in_data, PF_OutData *out_data, PF_ParamDef *params[], PF_LayerDef *output) {
+PF_Err EffectMain(PF_Cmd cmd, PF_InData *in_data, PF_OutData *out_data, PF_ParamDef *params[], PF_LayerDef *output, void *extra) {
 	PF_Err err = PF_Err_NONE;
 	switch (cmd) {
 	case PF_Cmd_ABOUT:            err = About(in_data, out_data, params, output); break;
@@ -527,6 +666,10 @@ PF_Err EffectMain(PF_Cmd cmd, PF_InData *in_data, PF_OutData *out_data, PF_Param
 	case PF_Cmd_SEQUENCE_SETDOWN: err = SequenceSetdown(in_data, out_data, params, output); break;
 	case PF_Cmd_SEQUENCE_RESETUP: err = SequenceResetup(in_data, out_data, params, output); break;
 	case PF_Cmd_RENDER:           err = Render(in_data, out_data, params, output); break;
+#ifdef CM_AE_BUILD
+	case PF_Cmd_SMART_PRE_RENDER: err = PreRender(in_data, out_data, (PF_PreRenderExtra *)extra); break;
+	case PF_Cmd_SMART_RENDER:     err = SmartRender(in_data, out_data, (PF_SmartRenderExtra *)extra); break;
+#endif
 	}
 	return err;
 }

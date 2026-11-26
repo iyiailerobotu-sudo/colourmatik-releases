@@ -7,8 +7,8 @@
 
 	Rendering: in Premiere Pro the effect declares the 32-bit float BGRA pixel
 	format (with an 8-bit BGRA fallback), so it applies the engine's 65^3 LUT at
-	full float precision — zero quantisation, no banding. In After Effects it
-	falls back to the classic 8-bit ARGB path.
+	full float precision — zero quantisation, no banding. In After Effects
+	(CM_AE_BUILD) it renders at the project's depth: 8, 16 or 32 bits.
 */
 #ifndef COLOURMATIK_H
 #define COLOURMATIK_H
@@ -35,7 +35,11 @@
 #include "PrSDKAESupport.h"
 
 #define MAJOR_VERSION   1
-#define MINOR_VERSION   1
+#ifdef CM_AE_BUILD
+#define MINOR_VERSION   2   // After Effects build: 8/16/32-bit SmartFX, linear working space
+#else
+#define MINOR_VERSION   1   // Premiere build: unchanged since 1.1
+#endif
 #define BUG_VERSION     0
 #define STAGE_VERSION   PF_Stage_DEVELOP
 #define BUILD_VERSION   1
@@ -51,10 +55,25 @@ enum {
 	CM_INPUT = 0,   // default input layer
 	CM_INTENSITY,   // 0..200 %, 100 = full match
 	CM_SLOT,        // which slot_<N>.cube to load (set by the panel)
+#ifdef CM_AE_BUILD
+	CM_LINEAR,      // the project's working space is linearised (set by the panel)
+#endif
 	CM_NUM_PARAMS
 };
 
-enum { CM_INTENSITY_DISK_ID = 1, CM_SLOT_DISK_ID = 2 };
+enum { CM_INTENSITY_DISK_ID = 1, CM_SLOT_DISK_ID = 2, CM_LINEAR_DISK_ID = 3 };
+
+// Two builds from this source. The Premiere one (MediaCore) keeps its proven
+// flags and pixel-format-suite path. The After Effects one (CM_AE_BUILD) is a
+// SmartFX effect that works at the project's own depth - 8, 16 or 32 bits per
+// channel - instead of making AE squeeze a deep project down to 8 bits for it,
+// and knows a linearised working space. The PiPL (colourMatikPiPL.r) follows
+// the same switch: AE checks its flags and version against GlobalSetup's.
+#ifdef CM_AE_BUILD
+#define CM_MATCH_NAME "catheadaiAEcolorMatik"
+#else
+#define CM_MATCH_NAME "catheadai colourMatik"
+#endif
 
 #define CM_INTENSITY_MIN     0
 #define CM_INTENSITY_MAX     200
@@ -74,7 +93,7 @@ enum { CM_INTENSITY_DISK_ID = 1, CM_SLOT_DISK_ID = 2 };
 extern "C" {
 	DllExport PF_Err EffectMain(
 		PF_Cmd cmd, PF_InData *in_data, PF_OutData *out_data,
-		PF_ParamDef *params[], PF_LayerDef *output);
+		PF_ParamDef *params[], PF_LayerDef *output, void *extra);
 }
 
 #endif // COLOURMATIK_H
