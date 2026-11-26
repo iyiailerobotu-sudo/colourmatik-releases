@@ -82,7 +82,19 @@ WORK.mkdir(exist_ok=True)
 # winner, scores). When a user reports "the colours came out wrong yesterday",
 # this file answers WHICH clips and WHAT the engine decided - the uvicorn access
 # log alone made that question unanswerable in the field.
-_MATCH_LOG = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "colourMatik" / "matches.log"
+if sys.platform == "win32":
+    _MATCH_LOG = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "colourMatik" / "matches.log"
+else:
+    # Not ~/colourMatik, where 1.8.5 and older kept it: the installer replaces
+    # that folder, and every reinstall took the match history with it.
+    _MATCH_LOG = Path.home() / "Library/Application Support/colourMatik/matches.log"
+    try:
+        _OLD_LOG = Path.home() / "colourMatik" / "matches.log"
+        if _OLD_LOG.exists() and not _MATCH_LOG.exists():
+            _MATCH_LOG.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(_OLD_LOG, _MATCH_LOG)
+    except Exception:
+        pass
 
 
 def _log_match(entry: dict) -> None:
@@ -544,7 +556,12 @@ def _process(src_path: Path, ref_path: Path, mode: str, tf: str, frames: int,
                           "corresponded": corresponded, "alts": res.alts,
                           "scores": res.scores, "method": res.method,
                           "s_lin": res.sample_src_lin, "t_lin": res.sample_tgt_lin,
-                          "draft": bool(fast), "src": str(src_path)})
+                          "draft": bool(fast), "src": str(src_path),
+                          # for "Save for review" (/report_bad)
+                          "ref": str(ref_path), "mode": mode, "frames": f,
+                          "src_at": src_at, "ref_at": ref_at,
+                          "src_range": src_range, "ref_range": ref_range,
+                          "notes": list(res.notes), "judge": res.judge})
     _log_match({"rid": rid, "target": str(src_path), "reference": str(ref_path),
                 "mode": mode, "tf": tf, "frames": f, "fast": bool(fast),
                 "src_at": src_at, "ref_at": ref_at,
@@ -792,6 +809,7 @@ def effect_lut(req: EffectLutReq):
                 return JSONResponse({"ok": False, "error": "unknown variant"}, status_code=404)
             lut = np.asarray(alt, dtype=np.float64)
             j["lut"] = lut          # strength/wipe operations follow the chosen look
+            j["chosen"] = req.variant
             j.pop("_dec", None)     # decomposition belongs to the previous look
         # NaN-guard the axis strengths (pydantic accepts the string "NaN" as a
         # float; one NaN here would poison every node of the baked cube).
@@ -996,9 +1014,148 @@ def group_shots(req: GroupShotsReq):
         return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=400)
 
 
+def _supervised() -> bool:
+    """Will something start this engine again if it exits? launchd sets
+    XPC_SERVICE_NAME to the job's label; the Windows keeper (engine-hidden.vbs)
+    sets COLOURMATIK_KEEPER. An engine started by hand, or left running by an
+    installer older than 1.8.5, has neither."""
+    if os.name == "nt":
+        return os.environ.get("COLOURMATIK_KEEPER") == "1"
+    return os.environ.get("XPC_SERVICE_NAME") == "com.colourmatik.engine"
+
+
 @app.get("/version")
 def version():
-    return {"name": "colourMatik", "version": __version__}
+    return {"name": "colourMatik", "version": __version__, "supervised": _supervised()}
+
+
+@app.post("/restart")
+def restart():
+    """The panel's "Restart engine". The supervisor (launchd on the Mac, the
+    keeper on Windows) starts the engine again the moment it exits. Without one
+    it is set up first, and when that fails the engine stays up: a restart must
+    never leave no engine at all."""
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    sup = _supervised()
+    if not sup:
+        try:
+            if os.name == "nt":
+                vbs = root / "windows" / "engine-hidden.vbs"
+                if not vbs.exists():
+                    return JSONResponse({"ok": False, "error": "the engine keeper is missing - run colourMatik Setup again"}, status_code=409)
+                # its keeper waits until this engine is gone, then starts a new one
+                subprocess.Popen(["wscript", str(vbs)], cwd=str(root), stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 creationflags=(0x08000000 | 0x00000200))
+            else:
+                label = "com.colourmatik.engine"
+                plist = Path.home() / "Library/LaunchAgents" / f"{label}.plist"
+                if not plist.exists():
+                    return JSONResponse({"ok": False, "error": "the engine's login item is missing - run the colourMatik installer again"}, status_code=409)
+                dom = f"gui/{os.getuid()}"
+                subprocess.run(["/bin/launchctl", "bootstrap", dom, str(plist)],
+                               capture_output=True, timeout=15)
+                held = subprocess.run(["/bin/launchctl", "print", f"{dom}/{label}"],
+                                      capture_output=True, timeout=15).returncode == 0
+                if not held:
+                    return JSONResponse({"ok": False, "error": "macOS did not take the engine's login item - check System Settings > General > Login Items"}, status_code=409)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
+    threading.Timer(0.5, lambda: os._exit(0)).start()
+    return {"ok": True, "supervised": sup}
+
+
+# "Save for review": everything needed to see why a match came out wrong, kept
+# on this machine (nothing is sent anywhere). The user hands the folder over.
+_REPORTS = _SLOT_DIR / "reports"
+
+
+class ReportReq(BaseModel):
+    rid: str
+    note: str = ""
+
+
+@app.post("/report_bad")
+def report_bad(req: ReportReq):
+    """Save a finished match for review: the reference, target and result
+    pictures (and the other looks the engine offered), the LUT that shipped,
+    full-resolution frames from both clips, and every number the engine
+    decided by - its candidates' scores and the naturalness judge's readings."""
+    import datetime as _dt
+    import platform as _pf
+    from PIL import Image as _Im
+    j = _JOBS.get(req.rid)
+    if j is None:
+        return JSONResponse({"ok": False, "error": "that match is no longer in memory - match again, then save it"}, status_code=404)
+    try:
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        d = _REPORTS / f"{stamp}_{req.rid[:6]}"
+        d.mkdir(parents=True, exist_ok=True)
+
+        def jpg(arr, name):
+            _Im.fromarray((np.clip(arr, 0, 1) * 255 + 0.5).astype("uint8")).save(d / name, quality=92)
+        lut = np.asarray(j["lut"], dtype=np.float64)
+        chosen = j.get("chosen") or j.get("method")
+        jpg(j["ref1"], "1-reference.jpg")
+        jpg(j["src1"], "2-target.jpg")
+        jpg(apply_lut(j["src1"], lut), "3-result.jpg")
+        for name, alt in (j.get("alts") or {}).items():
+            if name != chosen:
+                jpg(apply_lut(j["src1"], np.asarray(alt, dtype=np.float64)), f"4-other-look-{name}.jpg")
+        write_cube(d / "colourMatik.cube", lut, title="colourMatik review")
+        # full-resolution frames from the clips themselves, to re-run the match
+        for path, at, name in ((j.get("ref"), j.get("ref_at"), "5-reference-frame.png"),
+                               (j.get("src"), j.get("src_at"), "6-target-frame.png")):
+            if not path or not Path(path).exists():
+                continue
+            try:
+                fr = cmio.load_any(path, t=at, frames=1)
+                _Im.fromarray((np.clip(fr, 0, 1) * 255 + 0.5).astype("uint8")).save(d / name)
+            except Exception:
+                pass
+        info = {"engine": __version__, "platform": _pf.platform(), "saved": stamp,
+                "note": req.note, "rid": req.rid,
+                "reference": j.get("ref"), "target": j.get("src"), "mode": j.get("mode"),
+                "tf": j.get("tf"), "frames": j.get("frames"),
+                "reference_at": j.get("ref_at"), "target_at": j.get("src_at"),
+                "reference_range": j.get("ref_range"), "target_range": j.get("src_range"),
+                "winner": j.get("method"), "chosen": chosen, "draft": j.get("draft"),
+                "scores": j.get("scores"), "judge": j.get("judge"), "notes": j.get("notes")}
+        (d / "report.json").write_text(json.dumps(info, indent=2, ensure_ascii=False, default=float),
+                                       encoding="utf-8")
+        _log_match({"report": str(d), "rid": req.rid, "note": req.note})
+        return {"ok": True, "folder": str(d), "files": sorted(p.name for p in d.iterdir())}
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
+
+
+class RevealReq(BaseModel):
+    path: str = ""
+
+
+@app.post("/reveal")
+def reveal(req: RevealReq):
+    """Show a saved review folder (or all of them) in Finder / Explorer. Only
+    folders under reports/: this is not a door to open anything else."""
+    import subprocess
+    base = _REPORTS
+    base.mkdir(parents=True, exist_ok=True)
+    p = Path(req.path) if req.path else base
+    try:
+        rb, rp = base.resolve(), p.resolve()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "bad path"}, status_code=400)
+    if rp != rb and rb not in rp.parents:
+        return JSONResponse({"ok": False, "error": "only review folders can be shown"}, status_code=403)
+    if not rp.is_dir():
+        return JSONResponse({"ok": False, "error": "that folder is gone"}, status_code=404)
+    if os.name == "nt":
+        subprocess.Popen(["explorer", str(rp)])
+    else:
+        subprocess.Popen(["/usr/bin/open", str(rp)])
+    return {"ok": True}
 
 
 class DiagReq(BaseModel):

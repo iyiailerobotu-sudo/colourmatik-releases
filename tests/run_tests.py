@@ -464,6 +464,101 @@ def test_windows_engine_keeper():
               t.index('"keeper.stop"') < t.index('Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue'))
 
 
+def test_review_and_restart():
+    """"Save for review" keeps everything needed to see why a match went wrong,
+    only on this computer; "Show folder" opens review folders and nothing else;
+    "Restart engine" exits only when something will start the engine again."""
+    print("\n=== 15. Save for review + engine restart ===")
+    import json as _json, os, tempfile, threading
+    from colourmatik import webapp as W
+    from colourmatik.lut import build_lut
+    tmp = Path(tempfile.mkdtemp(prefix="cmk-review-"))
+    saved = (W._REPORTS, W._MATCH_LOG, dict(W._JOBS))
+    W._REPORTS, W._MATCH_LOG = tmp / "reports", tmp / "matches.log"
+    try:
+        rng = np.random.default_rng(3)
+        ref, src = rng.random((90, 160, 3)), rng.random((90, 160, 3))
+        grade = build_lut(lambda x: x * np.array([1.05, 1.0, 0.92]), size=17)
+        W._JOBS["r1"] = {"lut": grade, "tf": "sRGB", "src1": src.astype(np.float32), "ref1": ref.astype(np.float32),
+                         "alts": {"grade": grade, "sep": build_lut(lambda x: x ** 1.1, size=17)},
+                         "scores": {"grade": 1.0, "sep": 2.0}, "method": "grade", "draft": False,
+                         "src": str(tmp / "missing-target.mp4"), "ref": str(tmp / "missing-ref.mp4"),
+                         "mode": "different", "frames": 7, "src_at": 1.5, "ref_at": None,
+                         "src_range": None, "ref_range": None, "notes": ["n1"],
+                         "judge": {"grade": {"twist": np.float64(0.0), "tone": 0.0}}}
+        r = W.report_bad(W.ReportReq(rid="r1", note="sky went purple"))
+        files = set(r.get("files", [])) if isinstance(r, dict) else set()
+        check("a saved review holds reference, target, result, the other look and the LUT",
+              {"1-reference.jpg", "2-target.jpg", "3-result.jpg", "4-other-look-sep.jpg",
+               "colourMatik.cube", "report.json"} <= files, f"({sorted(files)})")
+        info = _json.loads((Path(r["folder"]) / "report.json").read_text()) if files else {}
+        check("report.json carries the decision: winner, scores, judge numbers, notes, the note",
+              info.get("winner") == "grade" and info.get("scores", {}).get("sep") == 2.0
+              and "grade" in (info.get("judge") or {}) and info.get("notes") == ["n1"]
+              and info.get("note") == "sky went purple" and info.get("target_at") == 1.5)
+        check("reviews live under the support folder's reports/", Path(r["folder"]).parent == W._REPORTS)
+        miss = W.report_bad(W.ReportReq(rid="gone"))
+        check("an evicted match says so instead of failing", getattr(miss, "status_code", 0) == 404)
+
+        opened = []
+        import subprocess as _sp
+        saved_popen = _sp.Popen
+        _sp.Popen = lambda args, **kw: opened.append(args)
+        try:
+            ok = W.reveal(W.RevealReq(path=r["folder"]))
+            out = W.reveal(W.RevealReq(path=str(tmp)))
+            esc = W.reveal(W.RevealReq(path=r["folder"] + "/../../.."))
+        finally:
+            _sp.Popen = saved_popen
+        check("Show folder opens a review folder", isinstance(ok, dict) and ok.get("ok") and len(opened) == 1)
+        check("Show folder refuses anything outside reports/ (also via ..)",
+              getattr(out, "status_code", 0) == 403 and getattr(esc, "status_code", 0) == 403 and len(opened) == 1)
+
+        exits = []
+        saved_timer, saved_sup, saved_home = threading.Timer, W._supervised, os.environ.get("HOME")
+        class _T:
+            def __init__(self, t, fn): exits.append(t)
+            def start(self): pass
+        threading.Timer = _T
+        try:
+            W._supervised = lambda: True
+            a = W.restart()
+            W._supervised = lambda: False
+            os.environ["HOME"] = str(tmp)          # no LaunchAgent here
+            b = W.restart() if os.name != "nt" else None
+        finally:
+            threading.Timer, W._supervised = saved_timer, saved_sup
+            if saved_home is not None:
+                os.environ["HOME"] = saved_home
+        check("a supervised engine restarts by exiting", isinstance(a, dict) and a.get("ok") and exits == [0.5])
+        if os.name != "nt":
+            check("an unsupervised engine without its login item refuses to exit",
+                  getattr(b, "status_code", 0) == 409 and exits == [0.5])
+        sup_env = os.environ.get("XPC_SERVICE_NAME")
+        os.environ["XPC_SERVICE_NAME"] = "com.colourmatik.engine"
+        try:
+            check("launchd's job is recognised as supervised (XPC_SERVICE_NAME)", os.name == "nt" or W._supervised())
+        finally:
+            if sup_env is None: os.environ.pop("XPC_SERVICE_NAME", None)
+            else: os.environ["XPC_SERVICE_NAME"] = sup_env
+        vbs = (Path(__file__).resolve().parent.parent / "windows" / "engine-hidden.vbs").read_text()
+        check("the Windows keeper marks its engine as supervised",
+              'sh.Environment("Process")("COLOURMATIK_KEEPER") = "1"' in vbs
+              and vbs.index("COLOURMATIK_KEEPER") < vbs.index("sh.Run cmd, 0, True"))
+        st = (Path(__file__).resolve().parent.parent / "mac" / "app" / "engine-starter.applescript").read_text()
+        check("the Mac starter kickstarts a held job and re-registers a missing one",
+              "launchctl kickstart" in st and "launchctl bootstrap" in st)
+        for panel in ("colourmatik-uxp/main.js", "colourmatik-cep/client/main.js"):
+            js = (Path(__file__).resolve().parent.parent / panel).read_text()
+            check(f"{panel.split('/')[0]}: the panel offers Start / Restart engine and Save for review",
+                  "engineControl" in js and "/restart" in js and "/report_bad" in js and "/reveal" in js
+                  and "colourMatik Engine.app" in js and "engine-hidden.vbs" in js)
+    finally:
+        W._REPORTS, W._MATCH_LOG = saved[0], saved[1]
+        W._JOBS.clear(); W._JOBS.update(saved[2])
+        import shutil as _sh; _sh.rmtree(tmp, ignore_errors=True)
+
+
 def test_slot_retention():
     """A saved project points at slot numbers and the effect renders identity when
     the file is gone - so garbage collection may only remove what no project can
@@ -952,6 +1047,7 @@ if __name__ == "__main__":
     test_look_transfer()
     test_mac_engine_autostart()
     test_windows_engine_keeper()
+    test_review_and_restart()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")

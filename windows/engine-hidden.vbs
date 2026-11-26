@@ -28,6 +28,10 @@ stopPath = dataDir & "\keeper.stop"
 py = root & "\.venv\Scripts\python.exe"
 cmd = "cmd /c cd /d """ & root & """ && "".venv\Scripts\python.exe"" -u -m colourmatik.webapp >> """ & logDir & "\engine.log"" 2>&1"
 
+' The engine knows it is kept (GET /version says "supervised"), so its
+' "Restart engine" can simply exit.
+sh.Environment("Process")("COLOURMATIK_KEEPER") = "1"
+
 Set lock = Nothing
 For i = 1 To 30
   On Error Resume Next

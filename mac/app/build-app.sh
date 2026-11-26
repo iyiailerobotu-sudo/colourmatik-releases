@@ -56,6 +56,20 @@ if [ "$MODE" = "sign" ]; then
       codesign --force --options runtime --timestamp --sign "$APP_IDENTITY" "$b"; }
   done
 fi
+# The panels' "Start engine" opens this little app (Premiere's panel cannot
+# run commands): it kickstarts the engine's launchd job, or registers it again.
+STARTER="$STAGE/colourMatik/mac/colourMatik Engine.app"
+osacompile -o "$STARTER" "$APPDIR/engine-starter.applescript"
+SP="$STARTER/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.catheadai.colourmatik.engine-starter" "$SP" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.catheadai.colourmatik.engine-starter" "$SP"
+/usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$SP" 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$SP"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" "$SP" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VER" "$SP"
+cp "$ROOT/assets/icons/colourMatik.icns" "$STARTER/Contents/Resources/applet.icns"
+if [ "$MODE" = "sign" ]; then
+  codesign --force --options runtime --timestamp --sign "$APP_IDENTITY" "$STARTER"
+else
+  codesign --force --sign - "$STARTER"
+fi
 /usr/bin/ditto -c -k --keepParent "$STAGE/colourMatik" "$APP/Contents/Resources/payload.zip"
 rm -rf "$STAGE"
 echo "  payload.zip: colourMatik $VER from $HEAD_REV ($(du -h "$APP/Contents/Resources/payload.zip" | awk '{print $1}'))"

@@ -324,6 +324,7 @@ async function run() {
   if (_matchingAll) return setStatus("MATCH ALL", "Batch matching is running — wait for it to finish.", "busy");
   const gen = ++_runGen;
   _matchBusy = true;
+  _reviewHide();
   // Snapshot the target NOW. The match takes seconds to minutes and the user can
   // re-capture meanwhile (the eyedropper stays live) — this run must apply to the
   // clip it was started for, not whatever was captured last.
@@ -403,7 +404,8 @@ async function run() {
       // well still be running in the engine after our 5-minute client timeout.
       if (netErr && netErr.name === "AbortError")
         throw new Error("The match is taking longer than 5 minutes — the engine may still be working. Try again with shorter clips, or wait and re-run.");
-      throw new Error("Can't reach the colourMatik engine. Just installed or updated? Wait half a minute and try again. Otherwise run the colourMatik installer again, or restart the computer.");
+      _engineLink(false);
+      throw new Error("Can't reach the colourMatik engine. Click \"Start engine\" at the bottom of this panel. Just installed or updated? Wait half a minute first.");
     }
     const j = await res.json().catch(() => ({ ok: false, error: "HTTP " + res.status }));
     if (!j.ok) throw new Error(j.error || ("HTTP " + res.status));
@@ -417,6 +419,7 @@ async function run() {
     refreshRun();
 
     state.rid = j.rid;
+    _reviewShow();
     $("preview-img").src = j.preview;
     $("preview").className = "";
 
@@ -945,6 +948,103 @@ async function checkForUpdates() {
   }
 }
 
+/* ---- "Save for review" ------------------------------------------------------
+ * A match that came out wrong is the most useful thing a user can hand over:
+ * the engine keeps the pictures, the LUT and every number it decided by in a
+ * folder on this computer (nothing is sent anywhere). */
+let _reviewFolder = "";
+function _reviewHide() {
+  $("review").className = "hidden"; $("review-show").className = "hidden";
+  $("review-link").textContent = "Result looks wrong? Save it for review"; _reviewFolder = "";
+}
+function _reviewShow() { _reviewHide(); $("review").className = ""; }
+async function saveForReview() {
+  if (!state.rid || $("review-link").textContent !== "Result looks wrong? Save it for review") return;
+  $("review-link").textContent = "Saving...";
+  let j = null;
+  try {
+    const r = await fetchT(SERVER + "/report_bad", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                    body: JSON.stringify({ rid: state.rid }) }, 60000);
+    j = await r.json();
+  } catch (e) {}
+  if (j && j.ok) {
+    _reviewFolder = j.folder;
+    $("review-link").textContent = "Saved for review";
+    $("review-show").className = "";
+    setStatus("SAVED", "This match is saved on this computer: the pictures, the LUT and the engine's numbers. Nothing was sent anywhere. Click \"Show folder\" to find it.", "done");
+  } else {
+    $("review-link").textContent = "Result looks wrong? Save it for review";
+    setStatus("ERROR", "Could not save it for review: " + ((j && j.error) || "the engine did not answer"), "error");
+  }
+}
+async function showReviewFolder() {
+  try {
+    await fetchT(SERVER + "/reveal", { method: "POST", headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ path: _reviewFolder }) }, 10000);
+  } catch (e) {}
+}
+
+/* ---- Engine control ---------------------------------------------------------
+ * "Restart engine" when it answers (the engine exits and its supervisor -
+ * launchd on the Mac, the keeper on Windows - starts it again), "Start engine"
+ * when it does not: this panel cannot run commands, so it opens the starter
+ * the installer put in the program folder (a small app on the Mac, the keeper
+ * script on Windows). */
+let _engineBusy = false;
+function _engineLink(up) {
+  const el = $("engine-link");
+  if (!el) return;
+  el.textContent = up ? "Restart engine" : "Start engine";
+  el.className = up ? "" : "down";
+}
+async function _homeDir() {
+  try { const os = require("os"); if (os.homedir && os.homedir()) return os.homedir(); } catch (e) {}
+  try {   // fallback: the plugin's data folder lives under the user's home
+    const p = (await uxp.storage.localFileSystem.getDataFolder()).nativePath || "";
+    const m = p.match(/^(.*?)[\\/](Library|AppData)[\\/]/);
+    if (m) return m[1];
+  } catch (e) {}
+  return "";
+}
+function _isWindows() {
+  try { return /^win/i.test(require("os").platform()); } catch (e) { return false; }
+}
+async function _versionNow(ms) {
+  try { const r = await fetchT(SERVER + "/version", { cache: "no-cache" }, ms || 2500); const j = await r.json(); return (j && j.version) ? j : null; }
+  catch (e) { return null; }
+}
+async function engineControl() {
+  if (_engineBusy || _matchBusy || _updating || _matchingAll) return;
+  _engineBusy = true;
+  try {
+    if (await _versionNow(2500)) {
+      setStatus("RESTARTING", "Restarting the colourMatik engine...", "busy");
+      let rj = null;
+      try { rj = await (await fetchT(SERVER + "/restart", { method: "POST" }, 20000)).json(); } catch (e) {}
+      if (!rj || !rj.ok) { setStatus("ERROR", "The engine could not restart: " + ((rj && rj.error) || "it did not answer"), "error"); return; }
+      await _sleep(2500);                 // let the old engine go first
+    } else {
+      const home = await _homeDir();
+      const starter = !home ? "" : (_isWindows() ? home + "\\colourMatik\\windows\\engine-hidden.vbs"
+                                                 : home + "/colourMatik/mac/colourMatik Engine.app");
+      setStatus("STARTING", "Starting the colourMatik engine...", "busy");
+      let err = starter ? "" : "the program folder was not found";
+      if (starter) {
+        try { err = (await uxp.shell.openPath(starter, "Starts colourMatik's colour engine on this computer.")) || ""; }
+        catch (e) { err = String((e && e.message) || e); }
+      }
+      if (err) { setStatus("ERROR", "Could not start the engine (" + err + "). Run the colourMatik installer again, or restart the computer.", "error"); return; }
+    }
+    for (let i = 0; i < 90; i++) {
+      const j = await _versionNow(2000);
+      if (j) { _engineLink(true); setStatus("READY", "Engine is up (v" + j.version + "). Pick a reference and a target.", "idle"); return; }
+      await _sleep(1000);
+    }
+    _engineLink(false);
+    setStatus("ERROR", "The colourMatik engine did not start. Run the colourMatik installer again, or restart the computer.", "error");
+  } finally { _engineBusy = false; }
+}
+
 /* ---- Wire up -------------------------------------------------------------- */
 $("refBtn").addEventListener("click", captureRef);
 $("srcBtn").addEventListener("click", captureSrc);
@@ -962,6 +1062,9 @@ $("run-all").addEventListener("click", matchAll);
 loadLibrary();
 $("site-link").addEventListener("click", () => openUrl(SITE_URL));
 $("update-link").addEventListener("click", checkForUpdates);
+$("engine-link").addEventListener("click", engineControl);
+$("review-link").addEventListener("click", saveForReview);
+$("review-show").addEventListener("click", showReviewFolder);
 $("version").textContent = "v" + LOCAL_VERSION;
 
 /* ---- AUTOMATIC updates ----------------------------------------------------
@@ -1000,6 +1103,7 @@ async function autoUpdateCheck() {
       const j = await r.json();
       if (j && j.version) {
         if (i > 0) setStatus("READY", "Engine is up (v" + j.version + "). Pick a reference and a target.", "idle");
+        _engineLink(true);
         autoUpdateCheck();
         return;
       }
@@ -1007,5 +1111,6 @@ async function autoUpdateCheck() {
     if (i === 0) setStatus("STARTING", "colourMatik engine is starting - this takes about half a minute after login or an update...", "busy");
     await _sleep(3000);
   }
-  setStatus("ERROR", "The colourMatik engine did not start. Run the colourMatik installer again, or restart the computer.", "error");
+  _engineLink(false);
+  setStatus("ERROR", "The colourMatik engine did not start. Click \"Start engine\" at the bottom of this panel; if that does not help, run the colourMatik installer again.", "error");
 })();

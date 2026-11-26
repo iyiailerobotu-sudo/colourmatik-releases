@@ -53,7 +53,7 @@ function httpJSON(method, path, payload, timeoutMs) {
           else reject(new Error((j && j.error) || ("HTTP " + res.statusCode)));
         });
       });
-      r.on("error", function () { reject(new Error("Can't reach the colourMatik engine. Just installed or updated? Wait half a minute and try again. Otherwise run the colourMatik installer again, or restart the computer.")); });
+      r.on("error", function () { _engineLink(false); reject(new Error("Can't reach the colourMatik engine. Click \"Start engine\" at the bottom of this panel. Just installed or updated? Wait half a minute first.")); });
       r.setTimeout(timeoutMs || 300000, function () { r.destroy(new Error("timeout")); });
       if (body != null) r.write(body);
       r.end();
@@ -203,6 +203,7 @@ async function run() {
   if (_updating) return setStatus("UPDATE", "Updating colourMatik — matching is paused until it finishes.", "busy");
   var gen = ++_runGen;
   _running = true;
+  _reviewHide();
   // Snapshot the target NOW: the engine takes seconds to minutes, and the user can
   // re-capture meanwhile — this match must land on the layer it was started for.
   var tgt = {
@@ -257,6 +258,7 @@ async function run() {
     refreshRun();
 
     state.rid = j.rid;
+    _reviewShow();
     if (j.preview) { $("preview-img").src = j.preview; $("preview").className = ""; }
 
     var ej = { ok: false };
@@ -591,6 +593,89 @@ function _reloadIntoNewPanel(newVersion) {
   return false;
 }
 /* ---- wire up -------------------------------------------------------------- */
+/* ---- "Save for review" ------------------------------------------------------
+ * A match that came out wrong is the most useful thing a user can hand over:
+ * the engine keeps the pictures, the LUT and every number it decided by in a
+ * folder on this computer (nothing is sent anywhere). */
+var _reviewFolder = "";
+var REVIEW_LABEL = "Result looks wrong? Save it for review";
+function _reviewHide() {
+  $("review").className = "hidden"; $("review-show").className = "hidden";
+  $("review-link").textContent = REVIEW_LABEL; _reviewFolder = "";
+}
+function _reviewShow() { _reviewHide(); $("review").className = ""; }
+function saveForReview() {
+  if (!state.rid || $("review-link").textContent !== REVIEW_LABEL) return;
+  $("review-link").textContent = "Saving...";
+  postJSON("/report_bad", { rid: state.rid }, 60000).then(function (j) {
+    if (!j || !j.ok) throw new Error((j && j.error) || "the engine did not answer");
+    _reviewFolder = j.folder;
+    $("review-link").textContent = "Saved for review";
+    $("review-show").className = "";
+    setStatus("SAVED", "This match is saved on this computer: the pictures, the LUT and the engine's numbers. Nothing was sent anywhere. Click \"Show folder\" to find it.", "done");
+  }).catch(function (e) {
+    $("review-link").textContent = REVIEW_LABEL;
+    setStatus("ERROR", "Could not save it for review: " + String((e && e.message) || e), "error");
+  });
+}
+function showReviewFolder() { postJSON("/reveal", { path: _reviewFolder }, 10000).catch(function () {}); }
+
+/* ---- Engine control ---------------------------------------------------------
+ * "Restart engine" when it answers (the engine exits and its supervisor -
+ * launchd on the Mac, the keeper on Windows - starts it again), "Start engine"
+ * when it does not: the starter the installer put in the program folder (a
+ * small app on the Mac, the keeper script on Windows). */
+var _engineBusy = false;
+function _engineLink(up) {
+  var el = $("engine-link");
+  if (!el) return;
+  el.textContent = up ? "Restart engine" : "Start engine";
+  el.className = up ? "" : "down";
+}
+function _startEngineHere() {
+  try {
+    var cp = _req("child_process"), os = _req("os"), home = os.homedir();
+    if (os.platform() === "win32")
+      cp.spawn("wscript", [home + "\\colourMatik\\windows\\engine-hidden.vbs"], { detached: true, stdio: "ignore" }).unref();
+    else
+      cp.spawn("/usr/bin/open", [home + "/colourMatik/mac/colourMatik Engine.app"], { detached: true, stdio: "ignore" }).unref();
+    return "";
+  } catch (e) { return String((e && e.message) || e); }
+}
+function _waitEngine(i) {
+  return getJSON("/version", 2000).then(function (j) {
+    if (j && j.version) return j;
+    throw new Error("no");
+  }).catch(function () {
+    if (i >= 90) return null;
+    return _sleep(1000).then(function () { return _waitEngine(i + 1); });
+  });
+}
+function engineControl() {
+  if (_engineBusy || _running || _updating) return;
+  _engineBusy = true;
+  getJSON("/version", 2500).then(function (j) { return !!(j && j.version); }, function () { return false; })
+    .then(function (up) {
+      if (up) {
+        setStatus("RESTARTING", "Restarting the colourMatik engine...", "busy");
+        return postJSON("/restart", {}, 20000).then(function (rj) {
+          if (!rj || !rj.ok) throw new Error((rj && rj.error) || "it did not answer");
+          return _sleep(2500);
+        }).catch(function (e) { throw new Error("The engine could not restart: " + String((e && e.message) || e)); });
+      }
+      setStatus("STARTING", "Starting the colourMatik engine...", "busy");
+      var err = _req ? _startEngineHere() : "this panel cannot start programs";
+      if (err) throw new Error("Could not start the engine (" + err + "). Run the colourMatik installer again, or restart the computer.");
+    })
+    .then(function () { return _waitEngine(0); })
+    .then(function (j) {
+      if (j) { _engineLink(true); setStatus("READY", "Engine is up (v" + j.version + "). Pick a reference and a target.", "idle"); }
+      else { _engineLink(false); setStatus("ERROR", "The colourMatik engine did not start. Run the colourMatik installer again, or restart the computer.", "error"); }
+    })
+    .catch(function (e) { setStatus("ERROR", String((e && e.message) || e), "error"); })
+    .then(function () { _engineBusy = false; });
+}
+
 $("refBtn").addEventListener("click", captureRef);
 $("srcBtn").addEventListener("click", captureSrc);
 $("mode-different").addEventListener("click", function () { $("mode-different").classList.add("selected"); $("mode-same").classList.remove("selected"); });
@@ -602,6 +687,9 @@ $("lib-save").addEventListener("click", saveRefToLibrary);
 loadLibrary();
 $("site-link").addEventListener("click", function () { cs.openURLInDefaultBrowser(SITE_URL); });
 $("update-link").addEventListener("click", checkForUpdates);
+$("engine-link").addEventListener("click", engineControl);
+$("review-link").addEventListener("click", saveForReview);
+$("review-show").addEventListener("click", showReviewFolder);
 $("version").textContent = "v" + LOCAL_VERSION;
 
 /* the panel's REFERENCE/TARGET labels say "from the selected clip" — in AE that's
@@ -641,6 +729,7 @@ function autoUpdateCheck() {
   getJSON("/version", 2500).then(function (j) {
     if (j && j.version) {
       if (i > 0) setStatus("READY", "Engine is up (v" + j.version + "). Pick a reference and a target.", "idle");
+      _engineLink(true);
       autoUpdateCheck();
       return;
     }
@@ -648,6 +737,6 @@ function autoUpdateCheck() {
   }).catch(function () {
     if (i === 0) setStatus("STARTING", "colourMatik engine is starting - this takes about half a minute after login or an update...", "busy");
     if (i < 40) setTimeout(function () { engineWait(i + 1); }, 3000);
-    else setStatus("ERROR", "The colourMatik engine did not start. Run the colourMatik installer again, or restart the computer.", "error");
+    else { _engineLink(false); setStatus("ERROR", "The colourMatik engine did not start. Click \"Start engine\" at the bottom of this panel; if that does not help, run the colourMatik installer again.", "error"); }
   });
 })(0);

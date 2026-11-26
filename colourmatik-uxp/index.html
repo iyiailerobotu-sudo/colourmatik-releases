@@ -97,6 +97,10 @@
     #status.busy .state { color: #4ea1f7; }
     #status.done .state { color: #33ab5f; }
     #status.error .state { color: #e34850; }
+    #review { margin-top: 5px; font-size: 10px; text-align: right; }
+    #review.hidden, #review-show.hidden { display: none; }
+    #review-link, #review-show { color: #4ea1f7; cursor: pointer; }
+    #review-show { margin-left: 8px; }
 
     #preview { margin-top: 12px; }
     #preview.hidden { display: none; }
@@ -142,7 +146,8 @@
     .footer .brand { font-weight: 700; color: var(--uxp-host-text-color, #c8c8c8); }
     .footer .dot { margin: 0 5px; color: #555555; }
     .footer-meta { margin-top: 4px; }
-    #site-link, #update-link { color: #4ea1f7; cursor: pointer; }
+    #site-link, #update-link, #engine-link { color: #4ea1f7; cursor: pointer; }
+    #engine-link.down { color: #e2a33e; font-weight: 700; }
     #tf { width: 100%; background: #262627; color: #d9d9de; border: 1px solid #3d3d3d;
           border-radius: 4px; padding: 5px 6px; font-size: 11px; }
     .secondary { position: relative; overflow: hidden; width: 100%; margin-top: 6px; background: #2b2b2c; color: #c9c9ce;
@@ -253,6 +258,7 @@
     <span class="state" id="status-state">IDLE</span>
     <span class="msg" id="status-msg">Select a reference clip and a target clip, then Match &amp; Apply.</span>
   </div>
+  <div id="review" class="hidden"><span id="review-link">Result looks wrong? Save it for review</span><span id="review-show" class="hidden">Show folder</span></div>
 
   <div id="preview" class="hidden"><img id="preview-img" src="" alt="before / after" /></div>
   <div id="alts" class="hidden"></div>
@@ -268,7 +274,7 @@
 
   <div class="footer">
     <span class="brand">colourMatik</span><span class="dot">&middot;</span>by Sevki Bugra Ozbek<span class="dot">&middot;</span><span id="site-link">catheadai.com</span>
-    <div class="footer-meta"><span id="version">v1.0.0</span><span class="dot">&middot;</span><span id="update-link">Check for updates</span></div>
+    <div class="footer-meta"><span id="version">v1.0.0</span><span class="dot">&middot;</span><span id="update-link">Check for updates</span><span class="dot">&middot;</span><span id="engine-link">Restart engine</span></div>
   </div>
 
   <script src="main.js"></script>
