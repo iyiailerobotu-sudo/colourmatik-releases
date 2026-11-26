@@ -1,0 +1,39 @@
+# Run the Windows engine keeper (windows/engine-hidden.vbs) on a real Windows
+# machine: it starts the engine, one keeper per user, a killed engine comes back,
+# keeper.stop, the updater's hand-over. See tests/windows_keeper_test.ps1.
+#
+# Run by hand only (Actions > windows-keeper-test > Run workflow) - account
+# protection: no automatic or scheduled runs.
+name: windows-keeper-test
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keeper:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Engine environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --quiet --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install --quiet -r requirements.txt
+
+      - name: Keeper behaviour
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows_keeper_test.ps1
+
+      - name: Engine log
+        if: always()
+        shell: pwsh
+        run: Get-Content "$env:LOCALAPPDATA\colourMatik\engine.log" -Tail 80 -ErrorAction SilentlyContinue

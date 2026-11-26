@@ -98,6 +98,9 @@ if exist "colourmatik-cep" (
 )
 <nul set /p "=92|Restarting the engine" > "%CMKPROG%" 2>nul
 echo ==^> Restarting the engine...
+rem The keeper (engine-hidden.vbs) restarts an engine that stops. keeper.stop
+rem makes it leave instead; the keeper started below takes over and clears it.
+type nul > "%APPDATA%\colourMatik\keeper.stop" 2>nul
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'colourmatik.webapp' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
 rem The new engine inherits this environment: hand it none of our CMK*
 rem variables, or its next update takes them for its own (a leaked

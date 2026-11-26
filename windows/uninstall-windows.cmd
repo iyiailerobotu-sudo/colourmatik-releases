@@ -1,7 +1,11 @@
 @echo off
 rem colourMatik - uninstaller (Windows). Removes the panel, effect, autostart and engine.
 echo ==^> Stopping the engine...
+rem keeper.stop: the keeper (engine-hidden.vbs) must not start it again.
+if exist "%APPDATA%\colourMatik" type nul > "%APPDATA%\colourMatik\keeper.stop" 2>nul
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'colourmatik.webapp' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" 2>nul
+rem ...and let it leave (it holds a file in the support folder removed below)
+powershell -NoProfile -Command "for ($i = 0; $i -lt 20; $i++) { if (-not (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'wscript.exe' -and $_.CommandLine -match 'engine-hidden' })) { break }; Start-Sleep 1 }" 2>nul
 echo ==^> Removing autostart...
 del "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\colourMatik Engine.lnk" 2>nul
 echo ==^> Removing the Premiere panel...

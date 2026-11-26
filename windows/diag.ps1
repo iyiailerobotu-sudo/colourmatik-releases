@@ -376,6 +376,9 @@ $liveVer = $null
 try { $liveVer = (Invoke-RestMethod "http://127.0.0.1:8765/version" -TimeoutSec 3).version } catch {}
 if ($diskVer -and $liveVer -ne $diskVer) {
     Say ("running engine v" + $liveVer + " != installed v" + $diskVer + " - restarting it")
+    $data = Join-Path $env:APPDATA "colourMatik"      # the keeper must leave, not restart the old one
+    New-Item -ItemType Directory -Force -Path $data | Out-Null
+    New-Item -ItemType File -Force -Path (Join-Path $data "keeper.stop") | Out-Null
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match "colourmatik" -and $_.Name -match "python|pythonw" } |
         ForEach-Object { Say ("  killing pid " + $_.ProcessId); Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }

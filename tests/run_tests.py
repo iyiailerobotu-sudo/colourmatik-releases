@@ -432,6 +432,38 @@ def test_mac_engine_autostart():
           < src.index('launchctl bootstrap "gui/$(id -u)" "$PLIST"'))
 
 
+def test_windows_engine_keeper():
+    """Before 1.8.5 the Windows launcher started the engine once and left: an
+    engine that died stayed dead until the next login. engine-hidden.vbs now
+    keeps it running (tests/windows_keeper_test.ps1 runs it for real on Windows,
+    via the manual windows-keeper-test workflow); these guard the parts every
+    caller depends on."""
+    print("\n=== 14. Windows engine keeper: an engine that stops comes back ===")
+    root = Path(__file__).resolve().parent.parent
+    win = root / "windows"
+    vbs = (win / "engine-hidden.vbs").read_text()
+    loop = vbs[vbs.index("\nDo\n"):vbs.index("\nLoop\n")] if "\nDo\n" in vbs and "\nLoop\n" in vbs else ""
+    check("the keeper waits on the engine inside a loop", "sh.Run cmd, 0, True" in loop)
+    check("the keeper leaves on keeper.stop, before and after each engine run",
+          loop.count("If fso.FileExists(stopPath) Then Exit Do") == 2)
+    check("one keeper per user (a lock it holds open, waited for up to 30 s)",
+          "Set lock = fso.OpenTextFile(lockPath, 2, True)" in vbs and "For i = 1 To 30" in vbs
+          and vbs.index("If lock Is Nothing Then WScript.Quit 0") < vbs.index("fso.DeleteFile stopPath"))
+    check("an engine that stops at once is retried less and less often", "If pause > 300 Then pause = 300" in vbs)
+    check("an engine already serving is watched, not fought", "If EngineAnswers() Then" in loop)
+    stop = 'type nul > "%APPDATA%\\colourMatik\\keeper.stop"'
+    up = (win / "update-windows.cmd").read_text()
+    check("the updater writes keeper.stop before it stops the engine and starts the new keeper",
+          up.index(stop) < up.index("'colourmatik.webapp'") < up.index('start "" wscript "%CMK_HOME%engine-hidden.vbs"'))
+    un = (win / "uninstall-windows.cmd").read_text()
+    check("the uninstaller writes keeper.stop before it stops the engine",
+          un.index("keeper.stop") < un.index("'colourmatik.webapp'"))
+    for name in ("install-windows.ps1", "diag.ps1"):
+        t = (win / name).read_text()
+        check(f"{name} writes keeper.stop before it stops the engine",
+              t.index('"keeper.stop"') < t.index('Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue'))
+
+
 def test_slot_retention():
     """A saved project points at slot numbers and the effect renders identity when
     the file is gone - so garbage collection may only remove what no project can
@@ -919,6 +951,7 @@ if __name__ == "__main__":
     test_windows_update_log()
     test_look_transfer()
     test_mac_engine_autostart()
+    test_windows_engine_keeper()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")

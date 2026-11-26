@@ -104,6 +104,11 @@ function Phase-Autostart {
     # An old engine process holding port 8765 silently kills every newer one at
     # bind — a machine can look "fully installed" while an ancient engine keeps
     # serving (seen in the field: disk at 1.6.6, port answering 0.2.0).
+    # keeper.stop first: the keeper (engine-hidden.vbs) restarts an engine that
+    # stops, and must leave instead. The keeper started below takes over.
+    $data = Join-Path $env:APPDATA "colourMatik"
+    New-Item -ItemType Directory -Force -Path $data | Out-Null
+    New-Item -ItemType File -Force -Path (Join-Path $data "keeper.stop") | Out-Null
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match "colourmatik" -and $_.Name -match "python|pythonw" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
