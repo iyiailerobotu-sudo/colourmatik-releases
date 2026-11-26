@@ -34,7 +34,7 @@ Check "the keeper starts the engine" ([bool]$v) "(version $v)"
 
 StartKeeper
 Start-Sleep 40
-$n = (Keepers).Count
+$n = @(Keepers).Count
 Check "a second keeper leaves: one keeper per user" ($n -eq 1) "($n keepers)"
 
 $before = (Engines | Select-Object -First 1).ProcessId
@@ -47,7 +47,7 @@ Check "a killed engine comes back by itself" ($down -and [bool]$v -and $after -a
 StopFile
 KillEngines
 Start-Sleep 20
-$n = (Keepers).Count; $v = Answers
+$n = @(Keepers).Count; $v = Answers
 Check "keeper.stop: the keeper leaves instead of restarting the engine" ($n -eq 0 -and -not $v) "($n keepers, engine $v)"
 
 StartKeeper
@@ -60,7 +60,7 @@ KillEngines
 StartKeeper
 $v = WaitAnswer 150
 Start-Sleep 5
-$n = (Keepers).Count
+$n = @(Keepers).Count
 Check "update hand-over: one keeper, engine serving" ($n -eq 1 -and [bool]$v -and -not (Test-Path $stop)) "($n keepers, version $v)"
 
 StopFile
