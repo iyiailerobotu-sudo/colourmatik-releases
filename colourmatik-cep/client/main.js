@@ -13,7 +13,7 @@ try {
   cs.evalScript('$.evalFile("' + _jsxPath + '")');
 } catch (e) {}
 var SERVER_HOST = "127.0.0.1", SERVER_PORT = 8765;
-var LOCAL_VERSION = "1.8.4";
+var LOCAL_VERSION = "1.8.5";
 // Update checks go through the local engine (GET /update_check), which reads
 // releases.catheadai.com/colourmatik/latest.json at most once a day for the
 // whole machine - the panel never goes online itself.
@@ -53,7 +53,7 @@ function httpJSON(method, path, payload, timeoutMs) {
           else reject(new Error((j && j.error) || ("HTTP " + res.statusCode)));
         });
       });
-      r.on("error", function () { reject(new Error("Can't reach the engine at http://" + SERVER_HOST + ":" + SERVER_PORT + " — start it with ./colourmatik-app")); });
+      r.on("error", function () { reject(new Error("Can't reach the colourMatik engine. Just installed or updated? Wait half a minute and try again. Otherwise run the colourMatik installer again, or restart the computer.")); });
       r.setTimeout(timeoutMs || 300000, function () { r.destroy(new Error("timeout")); });
       if (body != null) r.write(body);
       r.end();
@@ -648,6 +648,6 @@ function autoUpdateCheck() {
   }).catch(function () {
     if (i === 0) setStatus("STARTING", "colourMatik engine is starting - this takes about half a minute after login or an update...", "busy");
     if (i < 40) setTimeout(function () { engineWait(i + 1); }, 3000);
-    else setStatus("ERROR", "The engine did not start. Open the colourMatik installer once, or run ./colourmatik-app in the colourMatik folder.", "error");
+    else setStatus("ERROR", "The colourMatik engine did not start. Run the colourMatik installer again, or restart the computer.", "error");
   });
 })(0);

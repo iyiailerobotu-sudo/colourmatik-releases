@@ -1,5 +1,5 @@
 {
-  "version": "1.8.4",
+  "version": "1.8.5",
   "url": "https://releases.catheadai.com/colourmatik/colourMatik-windows-setup.exe",
-  "notes": "colourMatik 1.8.4 - a new way of matching two different shots: only the look is carried over (black and white point, tint, saturation), so what is in the picture is no longer read as a colour cast or as exposure - no more purple skies, green faces or blown-out highlights. Shots of the same scene are still matched in full."
+  "notes": "colourMatik 1.8.5 - on the Mac the engine no longer stops a few hours after installing: the installer registers it with macOS reliably, so it keeps running and comes back by itself. The panel now says what to do if the engine cannot be reached."
 }

@@ -8,7 +8,7 @@ const uxp = require("uxp");
 
 const SERVER = "http://127.0.0.1:8765";
 const DEFAULT_INTENSITY = 100;   // 100 = the exact computed match; slider dials 0–200 live
-const LOCAL_VERSION = "1.8.4";
+const LOCAL_VERSION = "1.8.5";
 
 /* fetch with a hard timeout — a wedged engine must never freeze the panel */
 async function fetchT(url, opts, ms) {
@@ -403,7 +403,7 @@ async function run() {
       // well still be running in the engine after our 5-minute client timeout.
       if (netErr && netErr.name === "AbortError")
         throw new Error("The match is taking longer than 5 minutes — the engine may still be working. Try again with shorter clips, or wait and re-run.");
-      throw new Error("Can't reach the engine at " + SERVER + " — start it with ./colourmatik-app");
+      throw new Error("Can't reach the colourMatik engine. Just installed or updated? Wait half a minute and try again. Otherwise run the colourMatik installer again, or restart the computer.");
     }
     const j = await res.json().catch(() => ({ ok: false, error: "HTTP " + res.status }));
     if (!j.ok) throw new Error(j.error || ("HTTP " + res.status));
@@ -1007,5 +1007,5 @@ async function autoUpdateCheck() {
     if (i === 0) setStatus("STARTING", "colourMatik engine is starting - this takes about half a minute after login or an update...", "busy");
     await _sleep(3000);
   }
-  setStatus("ERROR", "The engine did not start. Open the colourMatik installer once, or run ./colourmatik-app in the colourMatik folder.", "error");
+  setStatus("ERROR", "The colourMatik engine did not start. Run the colourMatik installer again, or restart the computer.", "error");
 })();

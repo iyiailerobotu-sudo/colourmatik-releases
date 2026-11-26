@@ -403,6 +403,35 @@ def test_look_transfer():
     check("alike shots still get full distribution matching", res.method != "grade", f"(chose {res.method})")
 
 
+def test_mac_engine_autostart():
+    """On 25 Nov 2026 a reinstall left the Mac engine running only as a child of
+    the installer: `bootout` returns before launchd has removed the old job, the
+    `bootstrap` that followed at once failed with "5: Input/output error" (and
+    was hidden), and macOS stopped the stray engine with the installer's admin
+    helper 3 h 43 min later. Reproduced on the Mac; these guard the fix."""
+    print("\n=== 13. Mac engine autostart: launchd holds the engine after an install ===")
+    root = Path(__file__).resolve().parent.parent
+    sec = (root / "mac/app/install-mac.sh").read_text()
+    sec = sec[sec.index("# 5) start the engine"):]
+    i_out = sec.index("launchctl bootout")
+    i_wait = sec.index('launchctl print "gui/$USER_UID/$LABEL" >/dev/null 2>&1 || break')
+    i_boot = sec.index('launchctl bootstrap "gui/$USER_UID" "$PLIST"')
+    check("installer waits until the old engine job is gone before registering the new one",
+          i_out < i_wait < i_boot)
+    check("installer retries and asks launchd whether it holds the job", "AGENT_OK=1" in sec
+          and 'launchctl print "gui/$USER_UID/$LABEL" >/dev/null 2>&1; then AGENT_OK=1' in sec)
+    code = "\n".join(l for l in sec.splitlines() if not l.lstrip().startswith("#"))
+    check("no plain nohup fallback (it dies with the installer's admin helper)", "nohup" not in code)
+    check("the last-resort engine runs in a session of its own", "start_new_session=True" in sec)
+    up = (root / "update.command").read_text()
+    check("the updater re-registers the engine when launchd does not hold it",
+          'launchctl bootstrap "gui/$(id -u)" "$PLIST"' in up and 'pkill -f "colourmatik.webapp"' in up)
+    src = (root / "install.command").read_text()
+    check("the source installer waits for the old job too",
+          src.index('launchctl print "gui/$(id -u)/com.colourmatik.engine" >/dev/null 2>&1 || break')
+          < src.index('launchctl bootstrap "gui/$(id -u)" "$PLIST"'))
+
+
 def test_slot_retention():
     """A saved project points at slot numbers and the effect renders identity when
     the file is gone - so garbage collection may only remove what no project can
@@ -889,6 +918,7 @@ if __name__ == "__main__":
     test_github_policy()
     test_windows_update_log()
     test_look_transfer()
+    test_mac_engine_autostart()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")

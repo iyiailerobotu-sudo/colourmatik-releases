@@ -80,7 +80,22 @@ fi
 prog 85 "Reinstalling the effect"
 ./install-effect.sh || true
 prog 96 "Restarting the engine"
-launchctl kickstart -k "gui/$(id -u)/com.colourmatik.engine" 2>/dev/null || true
+# Restart the engine on the new code. When launchd does not hold the engine
+# (an installer before 1.8.5 could leave it running only as its own child, which
+# macOS later stopped with the installer), register the LaunchAgent and stop the
+# stray copy, so the new engine is launchd's and comes back by itself.
+LABEL=com.colourmatik.engine
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+  launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
+elif [ -f "$PLIST" ]; then
+  pkill -f "colourmatik.webapp" 2>/dev/null || true
+  for i in 1 2 3 4 5 6; do
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null
+    launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && break
+    sleep 2
+  done
+fi
 prog 100 "Done"
 
 echo "${G}==> Updated. Restart Premiere Pro.${N}"

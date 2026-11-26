@@ -180,24 +180,56 @@ if [ -d "$DEST/.venv" ]; then
 </dict></plist>
 PL
   /usr/sbin/chown "$CONSOLE_USER" "$PLIST"
-  asuser /bin/launchctl bootout "gui/$USER_UID/com.colourmatik.engine" 2>/dev/null || true
-  asuser /bin/launchctl bootstrap "gui/$USER_UID" "$PLIST" 2>/dev/null || \
-  asuser /bin/launchctl load -w "$PLIST" 2>/dev/null || true
-  # "configured" is not "running": both launchctl forms can fail silently, and
-  # even a healthy engine needs ~30s of imports before it serves. Verify by
-  # ASKING it, fall back to a direct start, and never claim success blind —
-  # a reinstall that killed the service and could not restart it is exactly the
+  # Swap the engine's LaunchAgent. `bootout` returns before launchd has
+  # finished removing the running job, and a `bootstrap` in that window fails
+  # with "5: Input/output error"; the `load -w` fallback then landed while the
+  # old job was still being removed and was dropped with it - both silently.
+  # On 25 Nov 2026 the service was registered and removed in the same
+  # millisecond, so the engine ran only as the fallback child of this
+  # installer, and macOS stopped it together with the installer's admin helper
+  # 3 h 43 min later: "it worked once, then it stopped". So: wait until the old
+  # job is gone, bootstrap with retries, and ask launchd whether it holds the
+  # job. launchctl's own errors go to the install log.
+  LABEL="com.colourmatik.engine"
+  asuser /bin/launchctl bootout "gui/$USER_UID/$LABEL" 2>/dev/null || true
+  for i in $(seq 1 40); do
+    asuser /bin/launchctl print "gui/$USER_UID/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  AGENT_OK=""
+  for i in 1 2 3 4 5 6; do
+    asuser /bin/launchctl bootstrap "gui/$USER_UID" "$PLIST" 2>&1 | sed 's/^/  launchctl: /'
+    if asuser /bin/launchctl print "gui/$USER_UID/$LABEL" >/dev/null 2>&1; then AGENT_OK=1; break; fi
+    sleep 2
+  done
+  if [ -n "$AGENT_OK" ]; then
+    echo "Engine LaunchAgent registered with launchd."
+  else
+    echo "WARNING: launchd did not take the engine's LaunchAgent - it loads at the next login."
+  fi
+  # "configured" is not "running": even a healthy engine needs ~30s of imports
+  # before it serves. Verify by ASKING it, and never claim success blind - a
+  # reinstall that killed the service and could not restart it is exactly the
   # "everything is broken and slow" report from the field.
   ENGINE_OK=""
   for i in $(seq 1 45); do
     if /usr/bin/curl -s --max-time 2 "http://127.0.0.1:8765/version" >/dev/null 2>&1; then
       ENGINE_OK=1; break
     fi
-    [ "$i" = "15" ] && asuser /bin/launchctl kickstart "gui/$USER_UID/com.colourmatik.engine" 2>/dev/null || true
+    [ "$i" = "15" ] && asuser /bin/launchctl kickstart "gui/$USER_UID/$LABEL" 2>/dev/null || true
+    # Last resort, only when launchd does not hold the job: start the engine
+    # in a session of its own. A plain `nohup ... &` stays in this installer's
+    # process group, and macOS ends that group with the admin helper.
     # ($DEST / $USER_HOME: this script never defines $DIR or $HOME_DIR, and under
-    # `set -u` referencing them aborted the whole install at this line - a slow
-    # first engine start was reported as "couldn't finish installing")
-    [ "$i" = "25" ] && asuser /bin/sh -c "cd '$DEST' && nohup ./.venv/bin/python -u -m colourmatik.webapp >> '$USER_HOME/Library/Logs/colourmatik-engine.log' 2>&1 &" 2>/dev/null || true
+    # `set -u` referencing them aborted the whole install at this line)
+    if [ "$i" = "25" ] && [ -z "$AGENT_OK" ]; then
+      asuser /bin/sh -c 'cd "$1" && exec ./.venv/bin/python -c "$2" "$3"' sh "$DEST" \
+        'import subprocess, sys
+log = open(sys.argv[1], "ab")
+subprocess.Popen([sys.executable, "-u", "-m", "colourmatik.webapp"], stdin=subprocess.DEVNULL,
+                 stdout=log, stderr=log, start_new_session=True)' \
+        "$USER_HOME/Library/Logs/colourmatik-engine.log" 2>/dev/null || true
+    fi
     sleep 2
   done
   if [ -n "$ENGINE_OK" ]; then

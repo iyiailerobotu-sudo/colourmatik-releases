@@ -92,8 +92,18 @@ cat > "$PLIST" <<PL
   <key>StandardErrorPath</key><string>$HOME/Library/Logs/colourmatik-engine.log</string>
 </dict></plist>
 PL
+# bootout returns before launchd has removed the old job; a bootstrap in that
+# window fails ("5: Input/output error"). Wait for it to go, then retry.
 launchctl bootout "gui/$(id -u)/com.colourmatik.engine" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
+for i in $(seq 1 40); do
+  launchctl print "gui/$(id -u)/com.colourmatik.engine" >/dev/null 2>&1 || break
+  sleep 0.5
+done
+for i in 1 2 3 4 5 6; do
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null
+  launchctl print "gui/$(id -u)/com.colourmatik.engine" >/dev/null 2>&1 && break
+  sleep 2
+done
 ok "Engine will run in the background from now on"
 
 say "All done!"
