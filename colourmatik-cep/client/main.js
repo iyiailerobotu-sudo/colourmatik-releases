@@ -13,7 +13,7 @@ try {
   cs.evalScript('$.evalFile("' + _jsxPath + '")');
 } catch (e) {}
 var SERVER_HOST = "127.0.0.1", SERVER_PORT = 8765;
-var LOCAL_VERSION = "1.8.5";
+var LOCAL_VERSION = "1.9.0";
 // Update checks go through the local engine (GET /update_check), which reads
 // releases.catheadai.com/colourmatik/latest.json at most once a day for the
 // whole machine - the panel never goes online itself.

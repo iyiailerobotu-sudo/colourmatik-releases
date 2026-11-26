@@ -1,5 +1,5 @@
 {
-  "version": "1.8.5",
+  "version": "1.9.0",
   "url": "https://releases.catheadai.com/colourmatik/colourMatik-windows-setup.exe",
-  "notes": "colourMatik 1.8.5 - the engine keeps running: on the Mac the installer now registers it with macOS reliably, and on Windows an engine that stops is started again by itself within seconds. The panel now says what to do if the engine cannot be reached."
+  "notes": "colourMatik 1.9.0 - installs without downloading anything: the engine's own Python comes inside the installer. A match that looks wrong can be saved for review in one click, and the panel can start or restart the engine itself."
 }
