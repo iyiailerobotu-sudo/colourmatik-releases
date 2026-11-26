@@ -6,6 +6,51 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
+# The engine's own Python, when Setup carried one (runtime\): its packages are
+# already in it, so nothing is downloaded and pip never runs. .venv is a thin
+# layer over it (--system-site-packages), rebuilt whenever the runtime changes -
+# but never under a running engine, whose files Windows cannot replace: then
+# the current .venv stays, and the updater moves it once it has stopped the
+# engine (switch-runtime.ps1).
+$rtPy = Join-Path $Root "runtime\python.exe"
+$imports = "import fastapi, uvicorn, numpy, scipy, cv2, colour, imageio_ffmpeg, PIL"
+if (Test-Path $rtPy) {
+    $want = ((Get-Content (Join-Path $Root "runtime\RUNTIME_ID") -Raw -ErrorAction SilentlyContinue) + "").Trim()
+    if (-not $want) { $want = "runtime" }
+    $have = ((Get-Content ".venv\RUNTIME_ID" -Raw -ErrorAction SilentlyContinue) + "").Trim()
+    $venvPy = ".\.venv\Scripts\python.exe"
+    $ready = $false
+    if ($want -eq $have -and (Test-Path $venvPy)) { & $venvPy -c $imports 2>$null; $ready = ($LASTEXITCODE -eq 0) }
+    if ($ready) { Write-Host "==> Engine environment ready (bundled runtime $want)."; return }
+    $running = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                 Where-Object { $_.CommandLine -match "colourmatik.webapp" }).Count -gt 0
+    if ($running -and $have) {
+        Write-Host "==> The engine is running on the bundled runtime; its environment moves when it restarts."
+        return
+    }
+    if (-not $running) {
+        # Built beside the old one and swapped in only when it starts: a failed
+        # build must never leave no environment at all.
+        Write-Host "==> Creating .venv on the bundled runtime ($want)"
+        foreach ($d in @(".venv.new", ".venv.old")) { if (Test-Path $d) { Remove-Item $d -Recurse -Force } }
+        & $rtPy -m venv --system-site-packages .venv.new
+        if ($LASTEXITCODE -ne 0) { throw "Could not create the engine environment on the bundled runtime." }
+        & ".\.venv.new\Scripts\python.exe" -c $imports
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item ".venv.new" -Recurse -Force -ErrorAction SilentlyContinue
+            throw "The engine environment on the bundled runtime does not start."
+        }
+        Set-Content ".venv.new\RUNTIME_ID" $want -Encoding ascii -NoNewline
+        # a folder whose files are in use cannot be renamed: then nothing changed
+        if (Test-Path ".venv") { Rename-Item ".venv" ".venv.old" }
+        Rename-Item ".venv.new" ".venv"
+        Remove-Item ".venv.old" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "==> Engine environment ready (bundled runtime, nothing downloaded)."
+        return
+    }
+    Write-Host "==> The engine is running on its old environment: refreshing that one now; it moves to the bundled runtime when the updater restarts it."
+}
+
 function Find-Python311 {
     foreach ($cand in @("py -3.11", "python3.11", "python")) {
         try {

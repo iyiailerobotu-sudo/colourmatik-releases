@@ -66,8 +66,23 @@ try {
     if ($p.ExitCode -ne 0) { throw "Setup could not unpack the update (code $($p.ExitCode))." }
     if (-not (Test-Path (Join-Path $out 'version.json'))) { throw 'Setup unpacked no program.' }
     # Overwrite the program in place; .venv, vendored models and slot files are
-    # not part of it and are left alone.
-    Copy-Item (Join-Path $out '*') $Dest -Recurse -Force
+    # not part of it and are left alone. The bundled runtime is not overwritten
+    # either - the running engine holds its files: a changed one is staged as
+    # runtime.new, and switch-runtime.ps1 puts it in place once the updater has
+    # stopped the engine.
+    Get-ChildItem $out -Force | Where-Object { $_.Name -ne 'runtime' } |
+        ForEach-Object { Copy-Item $_.FullName $Dest -Recurse -Force }
+    $rtNew = Join-Path $out 'runtime'
+    if (Test-Path (Join-Path $rtNew 'python.exe')) {
+        $newId = ((Get-Content (Join-Path $rtNew 'RUNTIME_ID') -Raw -ErrorAction SilentlyContinue) + '').Trim()
+        $oldId = ((Get-Content (Join-Path $Dest 'runtime\RUNTIME_ID') -Raw -ErrorAction SilentlyContinue) + '').Trim()
+        if ($newId -and ($newId -ne $oldId)) {
+            $staged = Join-Path $Dest 'runtime.new'
+            if (Test-Path $staged) { Remove-Item $staged -Recurse -Force }
+            Copy-Item $rtNew $staged -Recurse -Force
+            Write-Host "==> New engine runtime staged ($newId)"
+        }
+    }
     Write-Host "==> Program refreshed into $Dest"
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

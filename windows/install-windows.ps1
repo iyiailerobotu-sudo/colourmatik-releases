@@ -33,7 +33,25 @@ $Root = Split-Path -Parent $Self
 if (Test-Path (Join-Path $Root ".git")) { $InstallDir = $Root }   # real checkout -> in place
 else { $InstallDir = Join-Path $env:USERPROFILE "colourMatik" }
 
+# Stop the engine on purpose: keeper.stop first, so its keeper (engine-hidden.vbs)
+# leaves instead of starting it again.
+function Stop-Engine {
+    $data = Join-Path $env:APPDATA "colourMatik"
+    New-Item -ItemType Directory -Force -Path $data | Out-Null
+    New-Item -ItemType File -Force -Path (Join-Path $data "keeper.stop") | Out-Null
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match "colourmatik" -and $_.Name -match "python|pythonw" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep 1
+}
+
 function Phase-Prereqs {
+    # The engine's own Python travels in Setup (runtime\): nothing to install.
+    # ffmpeg comes with the engine's packages (imageio-ffmpeg) either way.
+    if (Test-Path (Join-Path $Root "runtime\python.exe")) {
+        Write-Host "==> The engine's Python is bundled - nothing to download."
+        return
+    }
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         throw "winget (App Installer) is required. Install 'App Installer' from the Microsoft Store, then re-run."
     }
@@ -57,9 +75,26 @@ function Phase-Code {
     } else {
         Write-Host "==> Placing colourMatik in $InstallDir"
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+        $rtSrc = Join-Path $Root "runtime"
+        # A running engine holds the files of the runtime and .venv it runs on,
+        # and Windows cannot replace them: stop it first (Phase-Autostart starts
+        # it again).
+        if (Test-Path $rtSrc) { Stop-Engine }
         # Over the previous version, in place: .venv, vendored models and slot
         # files are not part of the program and are left alone.
-        Copy-Item (Join-Path $Root '*') $InstallDir -Recurse -Force
+        Get-ChildItem $Root -Force | Where-Object { $_.Name -ne "runtime" } |
+            ForEach-Object { Copy-Item $_.FullName $InstallDir -Recurse -Force }
+        # The bundled runtime only when it changed (about 280 MB).
+        if (Test-Path (Join-Path $rtSrc "python.exe")) {
+            $rtDst = Join-Path $InstallDir "runtime"
+            $newId = ((Get-Content (Join-Path $rtSrc "RUNTIME_ID") -Raw -ErrorAction SilentlyContinue) + "").Trim()
+            $oldId = ((Get-Content (Join-Path $rtDst "RUNTIME_ID") -Raw -ErrorAction SilentlyContinue) + "").Trim()
+            if ($newId -ne $oldId -or -not (Test-Path (Join-Path $rtDst "python.exe"))) {
+                Write-Host "==> Placing the engine's Python ($newId)"
+                if (Test-Path $rtDst) { Remove-Item $rtDst -Recurse -Force }
+                Copy-Item $rtSrc $rtDst -Recurse -Force
+            }
+        }
     }
     # Verify the folder really holds the program, and say which version.
     $vf = Join-Path $InstallDir "version.json"
@@ -104,15 +139,9 @@ function Phase-Autostart {
     # An old engine process holding port 8765 silently kills every newer one at
     # bind — a machine can look "fully installed" while an ancient engine keeps
     # serving (seen in the field: disk at 1.6.6, port answering 0.2.0).
-    # keeper.stop first: the keeper (engine-hidden.vbs) restarts an engine that
-    # stops, and must leave instead. The keeper started below takes over.
-    $data = Join-Path $env:APPDATA "colourMatik"
-    New-Item -ItemType Directory -Force -Path $data | Out-Null
-    New-Item -ItemType File -Force -Path (Join-Path $data "keeper.stop") | Out-Null
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match "colourmatik" -and $_.Name -match "python|pythonw" } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Sleep 1
+    # keeper.stop first (Stop-Engine): the keeper (engine-hidden.vbs) restarts an
+    # engine that stops, and must leave instead. The keeper started below takes over.
+    Stop-Engine
     Start-Process wscript -ArgumentList "`"$InstallDir\windows\engine-hidden.vbs`"" -WindowStyle Hidden
 }
 

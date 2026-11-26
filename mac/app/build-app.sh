@@ -74,6 +74,15 @@ fi
 rm -rf "$STAGE"
 echo "  payload.zip: colourMatik $VER from $HEAD_REV ($(du -h "$APP/Contents/Resources/payload.zip" | awk '{print $1}'))"
 
+# The engine's own Python (Apple Silicon) with its packages, next to the
+# program: installing then downloads nothing and runs no pip. NO_RUNTIME=1
+# builds the small installer that sets Python up online instead.
+if [ "${NO_RUNTIME:-}" != "1" ]; then
+  echo "==> Bundling the engine runtime (runtime.zip)"
+  "$APPDIR/build-runtime.sh" "$BUILD" "$MODE"
+  mv "$BUILD/runtime.zip" "$APP/Contents/Resources/runtime.zip"
+fi
+
 echo "==> Icon + Info.plist"
 cp "$ROOT/assets/icons/colourMatik.icns" "$APP/Contents/Resources/applet.icns"
 PB=/usr/libexec/PlistBuddy

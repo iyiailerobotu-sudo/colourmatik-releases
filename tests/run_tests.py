@@ -559,6 +559,54 @@ def test_review_and_restart():
         import shutil as _sh; _sh.rmtree(tmp, ignore_errors=True)
 
 
+def test_bundled_runtime():
+    """The installers carry the engine's own Python with its packages
+    (runtime/): installing downloads nothing and runs no pip. Guards the parts
+    that keep an install or update from ever ending without an engine."""
+    print("\n=== 16. Bundled engine runtime: offline install, safe updates ===")
+    root = Path(__file__).resolve().parent.parent
+    rd = lambda p: (root / p).read_text(encoding="utf-8")
+    req = rd("requirements.txt")
+    check("POT is gone from the engine's requirements (nothing ever imported it)", "POT" not in req)
+    for b in ("mac/app/build-runtime.sh", "windows/setup/build-runtime.ps1"):
+        t = rd(b)
+        check(f"{b}: a pinned python-build-standalone with its SHA-256", "20261110" in t and
+              any(len(w) == 64 and all(c in "0123456789abcdef" for c in w) for w in t.replace('"', " ").split()))
+        check(f"{b}: leaves out colour-science's 75 MB coverage report and the test suites",
+              "htmlcov" in t and "tests" in t)
+    sh = rd("setup.sh")
+    check("setup.sh uses the bundled runtime before it ever looks for a system Python",
+          sh.index('RT="$DIR/runtime"') < sh.index("find_py() {"))
+    check("setup.sh builds the new .venv beside the old one and swaps only when it starts",
+          sh.index("-m venv --system-site-packages .venv.new") < sh.index("rm -rf .venv && mv .venv.new .venv"))
+    ps = rd("windows/setup.ps1")
+    check("setup.ps1 never rebuilds .venv under a running engine",
+          "$running" in ps and ps.index("if (-not $running)") < ps.index("-m venv --system-site-packages .venv.new"))
+    check("setup.ps1 swaps by renaming (a folder in use cannot be renamed, so nothing changes)",
+          'Rename-Item ".venv" ".venv.old"' in ps and 'Rename-Item ".venv.new" ".venv"' in ps)
+    inst = rd("mac/app/install-mac.sh")
+    check("the Mac installer unpacks runtime.zip on Apple Silicon and skips the Python download",
+          '[ "$(/usr/bin/uname -m)" = "arm64" ]' in inst and inst.index('if [ -n "$USE_RT" ]; then')
+          < inst.index('elif ! have_py; then'))
+    upd = rd("update.command")
+    check("the Mac updater swaps the runtime in only when its RUNTIME_ID changed",
+          '[ "$NEW_RT" != "$OLD_RT" ]' in upd and upd.index('mv "$DIR/runtime" "$DIR/runtime.old"')
+          < upd.index('mv "$DIR/runtime.new/runtime" "$DIR/runtime"'))
+    fl = rd("windows/fetch-latest.ps1")
+    check("the Windows updater never copies over the runtime in use; a new one is staged",
+          "$_.Name -ne 'runtime'" in fl and "runtime.new" in fl)
+    wu = rd("windows/update-windows.cmd")
+    check("switch-runtime.ps1 runs after the engine is stopped and before the new keeper",
+          wu.index("'colourmatik.webapp'") < wu.index("switch-runtime.ps1") < wu.index('start "" wscript'))
+    iw = rd("windows/install-windows.ps1")
+    check("Setup skips winget when it carries the runtime, and stops the engine before replacing it",
+          iw.index('runtime\\python.exe")) {') < iw.index("winget install") and
+          iw.index("if (Test-Path $rtSrc) { Stop-Engine }") < iw.index("Copy-Item $rtSrc $rtDst"))
+    ba = rd("mac/app/build-app.sh")
+    check("the Mac installer build bundles runtime.zip next to payload.zip",
+          'build-runtime.sh" "$BUILD" "$MODE"' in ba and "Resources/runtime.zip" in ba)
+
+
 def test_slot_retention():
     """A saved project points at slot numbers and the effect renders identity when
     the file is gone - so garbage collection may only remove what no project can
@@ -901,6 +949,7 @@ def test_windows_update_log():
         '[Console]::Error.WriteLine("stub fetch: stderr line")\n', encoding="utf-8")
     (win / "setup.ps1").write_text('cmd /c echo stub setup: native child output\nWrite-Error "stub setup: an error"\n', encoding="utf-8")
     (win / "install-panel.ps1").write_text('Write-Output "stub panel: installed"\n', encoding="utf-8")
+    (win / "switch-runtime.ps1").write_text('Write-Output "stub switch-runtime"\n', encoding="utf-8")
     (win / "install-effect.ps1").write_text('$ErrorActionPreference = "Stop"\nthrow "stub effect: access denied"\n', encoding="utf-8")
     (win / "engine-hidden.vbs").write_text(
         'Set sh = CreateObject("WScript.Shell")\nSet fso = CreateObject("Scripting.FileSystemObject")\ns = ""\n'
@@ -1048,6 +1097,7 @@ if __name__ == "__main__":
     test_mac_engine_autostart()
     test_windows_engine_keeper()
     test_review_and_restart()
+    test_bundled_runtime()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")

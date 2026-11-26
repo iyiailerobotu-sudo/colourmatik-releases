@@ -16,6 +16,11 @@ on:
         description: "Release tag to attach colourMatik-windows-setup.exe to (e.g. windows-latest or win-v1.8.2); empty = build only"
         required: false
         default: ""
+      test_install:
+        description: "Also install the built Setup silently on this runner and check the offline engine runtime (tests/windows_setup_test.ps1)"
+        type: boolean
+        required: false
+        default: false
 
 # needed so the release-attach step can replace existing assets
 permissions:
@@ -33,6 +38,11 @@ jobs:
       - name: Build Setup.exe
         shell: pwsh
         run: ./windows/setup/build-setup.ps1
+
+      - name: Test the install (silent, offline runtime)
+        if: ${{ inputs.test_install }}
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows_setup_test.ps1 -Setup windows\setup\colourMatik-windows-setup.exe
 
       - uses: actions/upload-artifact@v4
         with:

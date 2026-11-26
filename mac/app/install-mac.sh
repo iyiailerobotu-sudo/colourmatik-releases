@@ -89,7 +89,21 @@ have_py() {
   done
   return 1
 }
-if ! have_py; then
+# The engine's own Python travels in the installer (runtime.zip, Apple
+# Silicon): then nothing at all is downloaded - no Python, no pip packages.
+RTZIP="$HERE/runtime.zip"
+USE_RT=""
+if [ -f "$RTZIP" ] && [ "$(/usr/bin/uname -m)" = "arm64" ]; then USE_RT=1; fi
+if [ -n "$USE_RT" ]; then
+  prog 13 30 "Unpacking the engine…"
+  echo "Unpacking the engine's own Python…"
+  /bin/cp "$RTZIP" "$SRC/runtime.zip" && /usr/sbin/chown "$CONSOLE_USER" "$SRC/runtime.zip" \
+    || fail "could not read the engine inside the installer — move colourMatik Installer to Applications and open it again"
+  asuser /usr/bin/ditto -x -k "$SRC/runtime.zip" "$DEST" || fail "could not unpack the engine"
+  /bin/rm -f "$SRC/runtime.zip"
+  /usr/bin/xattr -dr com.apple.quarantine "$DEST/runtime" 2>/dev/null || true
+  [ -x "$DEST/runtime/bin/python3" ] || fail "the engine's Python is missing after unpacking"
+elif ! have_py; then
   prog 13 30 "Installing Python (official package)…"
   echo "Installing Python 3.11 from python.org…"
   PYPKG="/tmp/colourMatik-python311.pkg"
@@ -97,7 +111,7 @@ if ! have_py; then
   /usr/sbin/installer -pkg "$PYPKG" -target / || fail "Python install failed"
   /bin/rm -f "$PYPKG"
 fi
-have_py || fail "Python 3.11 not available after install"
+[ -n "$USE_RT" ] || have_py || fail "Python 3.11 not available after install"
 
 # 3) Full engine setup + AI (as the user). setup.sh finds Python itself and
 #    refines progress (32 -> 84) via COLOURMATIK_PROGRESS.

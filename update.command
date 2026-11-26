@@ -61,6 +61,25 @@ ditto -x -k "$PAYLOAD" "$TMP/src" || fail "could not unpack the program"
 # Over the installed copy, in place: .venv / vendor / slot files are not part
 # of the program and are left alone; setup.sh below refreshes deps.
 ditto "$TMP/src/colourMatik" "$DIR" || fail "could not write the new version into $DIR"
+# The engine's own Python travels next to the program (Apple Silicon). It is
+# replaced only when it changed: unpacked beside the old one, then swapped in.
+# The running engine keeps the files it has open; the restart below uses the
+# new one (setup.sh rebuilds .venv on it).
+RTZIP="$(find "$TMP/app" -path '*.app/Contents/Resources/runtime.zip' | head -1)"
+if [ -n "$RTZIP" ] && [ "$(uname -m)" = "arm64" ]; then
+  NEW_RT="$(unzip -p "$RTZIP" runtime/RUNTIME_ID 2>/dev/null || true)"
+  OLD_RT="$(cat "$DIR/runtime/RUNTIME_ID" 2>/dev/null || true)"
+  if [ -n "$NEW_RT" ] && [ "$NEW_RT" != "$OLD_RT" ]; then
+    prog 15 "Updating the engine's Python"
+    echo "==> Engine runtime: ${OLD_RT:-none} -> $NEW_RT"
+    rm -rf "$DIR/runtime.new" "$DIR/runtime.old"
+    ditto -x -k "$RTZIP" "$DIR/runtime.new" || fail "could not unpack the engine's Python"
+    [ -x "$DIR/runtime.new/runtime/bin/python3" ] || fail "the engine's Python is incomplete"
+    if [ -d "$DIR/runtime" ]; then mv "$DIR/runtime" "$DIR/runtime.old"; fi
+    mv "$DIR/runtime.new/runtime" "$DIR/runtime" || fail "could not put the engine's Python in place"
+    rm -rf "$DIR/runtime.new" "$DIR/runtime.old"
+  fi
+fi
 rm -rf "$TMP"
 
 prog 25 "Refreshing the engine"

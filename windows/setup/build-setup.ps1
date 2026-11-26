@@ -6,7 +6,7 @@
 # so uncommitted edits are not shipped - minus the build-time paths that
 # .gitattributes marks export-ignore (artwork, tests, CI). The version stamp
 # comes from that tree's version.json.
-param([string]$MakeNsis = "")
+param([string]$MakeNsis = "", [switch]$NoRuntime)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -54,6 +54,14 @@ try {
     try { $ccxVer = ($sr.ReadToEnd() | ConvertFrom-Json).version } finally { $sr.Close() }
 } finally { $ccx.Dispose() }
 if ($ccxVer -ne $ver) { throw "colourMatik.ccx carries $ccxVer but version.json says $ver - rebuild the .ccx first." }
+
+# The engine's own Python with its packages (runtime\): installing then needs
+# no winget, no Python download and no pip. -NoRuntime builds the small Setup
+# that sets Python up online instead.
+if (-not $NoRuntime) {
+    Write-Host "==> Bundling the engine runtime"
+    & (Join-Path $Here "build-runtime.ps1") -Out $Payload
+}
 
 $files = Get-ChildItem $Payload -Recurse -File | Measure-Object Length -Sum
 Write-Host ("    {0} files, {1:N1} MB, version {2}" -f $files.Count, ($files.Sum / 1MB), $ver)

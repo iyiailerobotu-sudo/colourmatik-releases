@@ -32,3 +32,6 @@ dist/
 # built installer - it is uploaded to the release, never committed
 windows/setup/payload/
 windows/setup/colourMatik-windows-setup.exe
+
+# The engine runtime the Mac installer bundles (mac/app/build-runtime.sh)
+/runtime/
