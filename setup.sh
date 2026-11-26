@@ -15,6 +15,22 @@ cd "$DIR"
 # A failed write must NEVER kill the setup (set -e) — progress is cosmetic.
 prog() { { [ -n "${COLOURMATIK_PROGRESS:-}" ] && echo "$1|$2|$3" > "$COLOURMATIK_PROGRESS"; } 2>/dev/null || true; }
 
+# A freshly installed engine is slow the first time it runs: macOS checks every
+# new library when it is first loaded (the first match after an install took
+# 37 s, every later one 4). Run one tiny match here, under the installer's
+# progress bar, instead of in the user's first match.
+WARMUP='import numpy as np, subprocess, imageio_ffmpeg, cv2
+import colourmatik.webapp
+from colourmatik.match import match
+r = np.random.default_rng(0)
+match(r.random((48, 64, 3)), r.random((48, 64, 3)), corresponded=False, size=17)
+subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-version"], capture_output=True)'
+warm_up() {
+  prog 42 44 "Preparing the engine (first run)…"
+  echo "==> Preparing the engine (first run)"
+  ./.venv/bin/python -c "$WARMUP" >/dev/null 2>&1 || true
+}
+
 # The engine's own Python, when the installer carried one (runtime/, Apple
 # Silicon): the packages are already in it, so nothing is downloaded and pip
 # never runs. .venv is a thin layer over it (--system-site-packages), rebuilt
@@ -40,6 +56,7 @@ if [ -x "$RT/bin/python3" ] && "$RT/bin/python3" -c "$ENGINE_IMPORTS" 2>/dev/nul
   ./.venv/bin/python -c "$ENGINE_IMPORTS" 2>/dev/null \
     || { echo "ERROR: the engine environment on the bundled runtime does not start."; exit 1; }
   echo "==> Engine environment ready (bundled runtime, nothing downloaded)."
+  warm_up
   [ "${1:-}" = "--ai" ] || exit 0
 fi
 
@@ -89,4 +106,5 @@ if [ "${1:-}" = "--ai" ]; then
     fi
 fi
 
+warm_up
 echo "==> Done. Start the engine with:  ./colourmatik-app"

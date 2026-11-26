@@ -12,6 +12,15 @@ Set-Location $Root
 # but never under a running engine, whose files Windows cannot replace: then
 # the current .venv stays, and the updater moves it once it has stopped the
 # engine (switch-runtime.ps1).
+# A freshly installed engine is slow the first time it runs (every new library
+# is checked as it is first loaded): one tiny match here, under Setup's
+# progress bar, instead of in the user's first match.
+$warm = "import numpy as np, subprocess, imageio_ffmpeg, cv2; import colourmatik.webapp; from colourmatik.match import match; r = np.random.default_rng(0); match(r.random((48, 64, 3)), r.random((48, 64, 3)), corresponded=False, size=17); subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-version'], capture_output=True)"
+function Warm-Up($py) {
+    Write-Host "==> Preparing the engine (first run)"
+    try { & $py -c $warm 2>$null | Out-Null } catch {}
+}
+
 $rtPy = Join-Path $Root "runtime\python.exe"
 $imports = "import fastapi, uvicorn, numpy, scipy, cv2, colour, imageio_ffmpeg, PIL"
 if (Test-Path $rtPy) {
@@ -21,7 +30,7 @@ if (Test-Path $rtPy) {
     $venvPy = ".\.venv\Scripts\python.exe"
     $ready = $false
     if ($want -eq $have -and (Test-Path $venvPy)) { & $venvPy -c $imports 2>$null; $ready = ($LASTEXITCODE -eq 0) }
-    if ($ready) { Write-Host "==> Engine environment ready (bundled runtime $want)."; return }
+    if ($ready) { Write-Host "==> Engine environment ready (bundled runtime $want)."; Warm-Up $venvPy; return }
     $running = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
                  Where-Object { $_.CommandLine -match "colourmatik.webapp" }).Count -gt 0
     if ($running -and $have) {
@@ -46,6 +55,7 @@ if (Test-Path $rtPy) {
         Rename-Item ".venv.new" ".venv"
         Remove-Item ".venv.old" -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "==> Engine environment ready (bundled runtime, nothing downloaded)."
+        Warm-Up $venvPy
         return
     }
     Write-Host "==> The engine is running on its old environment: refreshing that one now; it moves to the bundled runtime when the updater restarts it."
@@ -106,3 +116,4 @@ Write-Host "    (First AI run also auto-downloads the SegFormer scene model, ~15
 & $python -c "import fastapi, numpy, cv2" 2>$null
 if ($LASTEXITCODE -ne 0) { throw "The engine environment is incomplete (a dependency is missing)." }
 Write-Host "==> Engine environment verified."
+Warm-Up $python

@@ -70,6 +70,12 @@ echo "source: $INNER ($(/usr/bin/grep -o '"version": *"[^"]*"' "$INNER/version.j
 
 # 1) place the code in ~/colourMatik (user-owned)
 prog 10 13 "Preparing files…"
+# The match history lived in the program folder until 1.8.5: keep it where the
+# engine keeps it now, before the folder is replaced.
+SUPPORT="$USER_HOME/Library/Application Support/colourMatik"
+if [ -f "$DEST/matches.log" ] && [ ! -f "$SUPPORT/matches.log" ]; then
+  asuser /bin/mkdir -p "$SUPPORT" && asuser /bin/cp -p "$DEST/matches.log" "$SUPPORT/matches.log" || true
+fi
 /bin/rm -rf "$DEST"; /bin/mkdir -p "$DEST"
 /usr/bin/ditto "$INNER" "$DEST"
 /usr/sbin/chown -R "$CONSOLE_USER" "$DEST"

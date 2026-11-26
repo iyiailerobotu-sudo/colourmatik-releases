@@ -608,6 +608,10 @@ def test_bundled_runtime():
     check("Setup skips winget when it carries the runtime, and stops the engine before replacing it",
           iw.index('runtime\\python.exe")) {') < iw.index("winget install") and
           iw.index("if (Test-Path $rtSrc) { Stop-Engine }") < iw.index("Copy-Item $rtSrc $rtDst"))
+    check("setup warms the engine up under the installer's bar (the first match took 37 s, then 4)",
+          sh.count("warm_up") >= 3 and ps.count("Warm-Up $") >= 3)
+    check("the Mac installer keeps the match history before it replaces the program folder",
+          inst.index('cp -p "$DEST/matches.log" "$SUPPORT/matches.log"') < inst.index('/bin/rm -rf "$DEST"'))
     ba = rd("mac/app/build-app.sh")
     check("the Mac installer build bundles runtime.zip next to payload.zip",
           'build-runtime.sh" "$BUILD" "$MODE"' in ba and "Resources/runtime.zip" in ba)
