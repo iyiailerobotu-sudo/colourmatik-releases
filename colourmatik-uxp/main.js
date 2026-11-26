@@ -987,9 +987,11 @@ async function showReviewFolder() {
 /* ---- Engine control ---------------------------------------------------------
  * "Restart engine" when it answers (the engine exits and its supervisor -
  * launchd on the Mac, the keeper on Windows - starts it again), "Start engine"
- * when it does not: this panel cannot run commands, so it opens the starter
- * the installer put in the program folder (a small app on the Mac, the keeper
- * script on Windows). */
+ * when it does not. This panel cannot run commands: on the Mac it opens the
+ * small starter app the installer put in the program folder. On Windows it
+ * cannot even do that - Premiere refuses a manifest that asks to launch
+ * scripts or programs (a ".exe" there hid the panel in 1.2.x, see
+ * tests/test_manifest.py) - so it points at the Start menu entry Setup adds. */
 let _engineBusy = false;
 function _engineLink(up) {
   const el = $("engine-link");
@@ -1024,16 +1026,19 @@ async function engineControl() {
       if (!rj || !rj.ok) { setStatus("ERROR", "The engine could not restart: " + ((rj && rj.error) || "it did not answer"), "error"); return; }
       await _sleep(2500);                 // let the old engine go first
     } else {
-      const home = await _homeDir();
-      const starter = !home ? "" : (_isWindows() ? home + "\\colourMatik\\windows\\engine-hidden.vbs"
-                                                 : home + "/colourMatik/mac/colourMatik Engine.app");
-      setStatus("STARTING", "Starting the colourMatik engine...", "busy");
-      let err = starter ? "" : "the program folder was not found";
-      if (starter) {
-        try { err = (await uxp.shell.openPath(starter, "Starts colourMatik's colour engine on this computer.")) || ""; }
-        catch (e) { err = String((e && e.message) || e); }
+      if (_isWindows()) {
+        setStatus("STARTING", "Start the engine from the Start menu: click \"colourMatik Engine\". This panel picks it up by itself.", "busy");
+      } else {
+        const home = await _homeDir();
+        const starter = home ? home + "/colourMatik/mac/colourMatik Engine.app" : "";
+        setStatus("STARTING", "Starting the colourMatik engine...", "busy");
+        let err = starter ? "" : "the program folder was not found";
+        if (starter) {
+          try { err = (await uxp.shell.openPath(starter, "Starts colourMatik's colour engine on this Mac.")) || ""; }
+          catch (e) { err = String((e && e.message) || e); }
+        }
+        if (err) { setStatus("ERROR", "Could not start the engine (" + err + "). Run the colourMatik installer again, or restart the Mac.", "error"); return; }
       }
-      if (err) { setStatus("ERROR", "Could not start the engine (" + err + "). Run the colourMatik installer again, or restart the computer.", "error"); return; }
     }
     for (let i = 0; i < 90; i++) {
       const j = await _versionNow(2000);

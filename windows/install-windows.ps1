@@ -135,6 +135,13 @@ function Phase-Autostart {
     $Lnk.TargetPath = Join-Path $InstallDir "windows\engine-hidden.vbs"
     $Lnk.WorkingDirectory = $InstallDir
     $Lnk.Save()
+    # ...and in the Start menu, to start it by hand: Premiere's panel cannot start
+    # programs on Windows, so its "Start engine" points here.
+    $Menu = $Ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Programs")) "colourMatik Engine.lnk"))
+    $Menu.TargetPath = Join-Path $InstallDir "windows\engine-hidden.vbs"
+    $Menu.WorkingDirectory = $InstallDir
+    $Menu.Description = "Start the colourMatik engine"
+    $Menu.Save()
     # start it now, silently
     # An old engine process holding port 8765 silently kills every newer one at
     # bind — a machine can look "fully installed" while an ancient engine keeps

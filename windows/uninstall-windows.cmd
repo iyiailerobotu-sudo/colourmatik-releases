@@ -8,6 +8,7 @@ rem ...and let it leave (it holds a file in the support folder removed below)
 powershell -NoProfile -Command "for ($i = 0; $i -lt 20; $i++) { if (-not (Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'wscript.exe' -and $_.CommandLine -match 'engine-hidden' })) { break }; Start-Sleep 1 }" 2>nul
 echo ==^> Removing autostart...
 del "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\colourMatik Engine.lnk" 2>nul
+del "%APPDATA%\Microsoft\Windows\Start Menu\Programs\colourMatik Engine.lnk" 2>nul
 echo ==^> Removing the Premiere panel...
 rem Remove via Adobe's plugin agent first (that is how it was installed), then
 rem clear any developer-mode copy left in Plugins\External.

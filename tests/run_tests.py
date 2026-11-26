@@ -552,7 +552,13 @@ def test_review_and_restart():
             js = (Path(__file__).resolve().parent.parent / panel).read_text()
             check(f"{panel.split('/')[0]}: the panel offers Start / Restart engine and Save for review",
                   "engineControl" in js and "/restart" in js and "/report_bad" in js and "/reveal" in js
-                  and "colourMatik Engine.app" in js and "engine-hidden.vbs" in js)
+                  and "colourMatik Engine.app" in js)
+        uxp = (Path(__file__).resolve().parent.parent / "colourmatik-uxp/main.js").read_text()
+        check("Premiere's panel never tries to launch a script on Windows (Premiere would refuse the panel)",
+              "engine-hidden.vbs" not in uxp and "Start menu" in uxp)
+        iw = (Path(__file__).resolve().parent.parent / "windows/install-windows.ps1").read_text()
+        check("Setup adds the Start menu entry that panel points at", '"colourMatik Engine.lnk"' in iw
+              and 'GetFolderPath("Programs")' in iw)
     finally:
         W._REPORTS, W._MATCH_LOG = saved[0], saved[1]
         W._JOBS.clear(); W._JOBS.update(saved[2])
