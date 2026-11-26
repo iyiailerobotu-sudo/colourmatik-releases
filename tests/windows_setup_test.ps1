@@ -27,7 +27,10 @@ $Setup = (Resolve-Path $Setup).Path
 Write-Host ("Setup: {0:N1} MB" -f ((Get-Item $Setup).Length / 1MB))
 if (Answers) { throw "an engine already answers on 127.0.0.1:8765 - run this on a clean machine" }
 $t0 = Get-Date
-$p = Start-Process -FilePath $Setup -ArgumentList "/S" -Wait -PassThru
+# Not -Wait: that waits for every process Setup starts, and Setup starts the
+# engine's keeper, which runs for as long as the user is logged in.
+$p = Start-Process -FilePath $Setup -ArgumentList "/S" -PassThru
+$p.WaitForExit()
 Write-Host ("Setup exit code {0}, {1:N0} s" -f $p.ExitCode, ((Get-Date) - $t0).TotalSeconds)
 $inst = Join-Path $env:USERPROFILE "colourMatik"
 $want = ((Get-Content (Join-Path $inst "version.json") -Raw | ConvertFrom-Json).version)
