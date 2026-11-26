@@ -617,6 +617,50 @@ def test_bundled_runtime():
           'build-runtime.sh" "$BUILD" "$MODE"' in ba and "Resources/runtime.zip" in ba)
 
 
+def test_face_anchor():
+    """Where both shots show people, the face's lightness is the exposure to
+    match (faces.py finds them; transforms._levels_curve takes the anchor).
+    On 12 real pairs with faces the look transfer's face-lightness error fell
+    from 0.06-0.13 to 0.02-0.11; on 22 calibration pairs no alike / unlike
+    decision changed. These guard the mechanics."""
+    print("\n=== 17. Faces: exposure anchor and skin from real faces ===")
+    from colourmatik import faces as fc
+    from colourmatik.transforms import _levels_curve, fit_look
+    from colourmatik.colorspace import linear_to_oklab
+    check("the face model ships with the engine (YuNet, MIT)", fc._MODEL.exists()
+          and (fc._MODEL.parent / "LICENSE-face_detection_yunet").exists())
+    blank = np.full((360, 640, 3), 0.5)
+    check("no face in a flat frame", fc.find_faces(blank) == [] and fc.face_mask(blank) is None)
+    rng = np.random.default_rng(5)
+    Ls, Lt = rng.uniform(0.15, 0.9, 20000), rng.uniform(0.1, 0.8, 20000)
+    plain = _levels_curve(Ls, Lt)
+    bent = _levels_curve(Ls, Lt, anchor=(0.70, 0.45))
+    y0, y1 = float(plain(0.70)), float(bent(0.70))
+    want = y0 + max(-0.15, min(0.15, 0.6 * (0.45 - y0)))
+    check("the curve carries the face 60% of the way (at most 0.15)", abs(y1 - want) < 0.01,
+          f"(face 0.70 -> {y0:.3f} without, {y1:.3f} with, wanted {want:.3f})")
+    xs = np.linspace(0, 1, 501); d = np.diff(bent(xs))
+    check("the bent curve stays monotone", bool((d > 0).all()))
+    check("a face outside what the frame shows is ignored",
+          abs(float(_levels_curve(Ls, Lt, anchor=(0.99, 0.2))(0.5)) - float(plain(0.5))) < 1e-9)
+    # a bright face against darker faces in the reference
+    src = np.clip(rng.uniform(0.05, 0.9, (30000, 3)), 0, 1)
+    face_s = np.zeros(30000, bool); face_s[:3000] = True
+    src[face_s] = np.array([0.85, 0.62, 0.50]) * rng.uniform(0.95, 1.05, (3000, 1))
+    tgt = np.clip(rng.uniform(0.05, 0.9, (30000, 3)), 0, 1)
+    face_t = np.zeros(30000, bool); face_t[:3000] = True
+    tgt[face_t] = np.array([0.45, 0.30, 0.24]) * rng.uniform(0.95, 1.05, (3000, 1))
+    L = lambda f, x: float(np.median(linear_to_oklab(f(x))[:, 0]))
+    off = fit_look(src, tgt)
+    on = fit_look(src, tgt, face_src=face_s, face_tgt=face_t)
+    lt = float(np.median(linear_to_oklab(tgt[face_t])[:, 0]))
+    e_off, e_on = abs(L(off, src[face_s]) - lt), abs(L(on, src[face_s]) - lt)
+    check("faces in both shots bring the source face toward the reference face",
+          e_on < 0.7 * e_off and on.info["face_anchor"] is not None, f"(error {e_off:.3f} -> {e_on:.3f})")
+    check("faces in one shot only change nothing about exposure",
+          fit_look(src, tgt, face_src=face_s).info["face_anchor"] is None)
+
+
 def test_slot_retention():
     """A saved project points at slot numbers and the effect renders identity when
     the file is gone - so garbage collection may only remove what no project can
@@ -1108,6 +1152,7 @@ if __name__ == "__main__":
     test_windows_engine_keeper()
     test_review_and_restart()
     test_bundled_runtime()
+    test_face_anchor()
     print("\n" + ("=" * 48))
     if FAILS:
         print(f"FAILED: {len(FAILS)} -> {FAILS}")

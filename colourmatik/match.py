@@ -49,7 +49,8 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
           lattice_L: int = 25, sample: int = 300_000, seed: int = 0,
           skin_protect: bool = True, skin_weight: float = 8.0,
           neural: bool = False, look: str = "exact",
-          refine: bool = False, quick: bool = False, progress=None) -> MatchResult:
+          refine: bool = False, quick: bool = False, progress=None,
+          src_frames: int = 1, tgt_frames: int = 1, faces: bool = True) -> MatchResult:
     """Match `src_enc` (video 2) to `tgt_enc` (video 1). Returns winning LUT + report.
 
     Every candidate is turned into its actual `size^3` LUT, that LUT is applied to
@@ -174,6 +175,19 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
         Tf_enc = T_enc[tidx]
     Tf_lin = cs.decode(Tf_enc, tf)
 
+    # Faces (faces.py): where both shots show people, their face lightness is
+    # the exposure to match, and their skin is what must keep its hue.
+    face_s = face_t = None
+    if faces and not corresponded and src_enc.ndim == 3 and tgt_enc.ndim == 3:
+        try:
+            from . import faces as fc_mod
+            ms = fc_mod.face_mask(src_enc, src_frames)
+            mt = fc_mod.face_mask(tgt_enc, tgt_frames)
+            face_s = ms.reshape(-1)[idx] if ms is not None else None
+            face_t = mt.reshape(-1)[tidx] if mt is not None else None
+        except Exception:
+            face_s = face_t = None
+
     weights = None
     skin_p = None
     if skin_protect:
@@ -193,7 +207,7 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
             tf_mod.fit_lut_lattice(Sf_enc, Tf_enc, L=lattice_L, weights=weights), size)
         luts["mkl"] = build_lut(tf_mod.fit_mkl(Sf_lin, Tf_lin), size=size, tf=tf)
         luts["sep"] = build_lut(tf_mod.fit_sep(Sf_lin, Tf_lin), size=size, tf=tf)
-        luts["grade"] = build_lut(tf_mod.fit_look(Sf_lin, Tf_lin, skin_src=skin_p), size=size, tf=tf)
+        luts["grade"] = build_lut(tf_mod.fit_look(Sf_lin, Tf_lin, skin_src=skin_p, face_src=face_s, face_tgt=face_t), size=size, tf=tf)
     else:
         # Different scenes / not aligned: match the colour DISTRIBUTIONS.
         _p(0.10, "Matching colour distributions")
@@ -217,7 +231,7 @@ def match(src_enc: np.ndarray, tgt_enc: np.ndarray, *, corresponded: bool = True
         # Hue-preserving Oklab "colorist" transfer: tone curve + balance + saturation.
         # Cheap (0.2s), so the draft has it too — the draft and the final then
         # agree whenever the full contest also lands on it.
-        luts["grade"] = build_lut(tf_mod.fit_look(Sf_lin, Tf_lin, skin_src=skin_p), size=size, tf=tf)
+        luts["grade"] = build_lut(tf_mod.fit_look(Sf_lin, Tf_lin, skin_src=skin_p, face_src=face_s, face_tgt=face_t), size=size, tf=tf)
         # How alike are the two pictures' colour worlds? Exact-distribution
         # transport (IDT) is a superb match between shots of the same kind of
         # content and a wrecking ball between unrelated ones: on real footage

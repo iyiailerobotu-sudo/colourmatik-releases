@@ -218,7 +218,8 @@ def _neutral_cast(ok: np.ndarray, W: np.ndarray, sigma: float = 0.04,
 
 
 def _levels_curve(Ls: np.ndarray, Lt: np.ndarray, mid_trust: float = 0.5,
-                  slope=(0.4, 2.2), end_cap=(0.15, 0.25), mid_cap: float = 0.12):
+                  slope=(0.4, 2.2), end_cap=(0.15, 0.25), mid_cap: float = 0.12,
+                  anchor=None, anchor_trust: float = 0.6, anchor_cap: float = 0.15):
     """Tone as a look: black point, white point and - half as much - the
     midtones follow the reference, each by no more than a grade would move it.
     Monotone, slopes capped.
@@ -234,7 +235,13 @@ def _levels_curve(Ls: np.ndarray, Lt: np.ndarray, mid_trust: float = 0.5,
     Above the source's own white point the curve is a shoulder that approaches
     white without reaching it: the brightest thing in the frame (a moon, a lamp)
     is brighter than 99% of the picture, and a straight continuation sent it
-    past white - an orange moon came out as a white disc."""
+    past white - an orange moon came out as a white disc.
+
+    `anchor` = (face lightness in the source, face lightness in the reference):
+    when both shots show faces, how bright a face is IS the exposure a
+    colourist matches, so the curve is bent to carry the source's faces 60% of
+    the way to the reference's (no more than 0.15) - within the same slope
+    limits, or not at all."""
     from scipy.interpolate import PchipInterpolator
     xs = np.percentile(Ls, [1.0, 50.0, 99.0])
     ys = np.percentile(Lt, [1.0, 50.0, 99.0])
@@ -259,26 +266,42 @@ def _levels_curve(Ls: np.ndarray, Lt: np.ndarray, mid_trust: float = 0.5,
     hi = mid + s2 * (xs[2] - xs[1])
     xk = np.array([xs[0], xs[1], xs[2]]) + np.arange(3) * 1e-6
     yk = np.array([lo, mid, hi]) + np.arange(3) * 1e-9
+    if anchor is not None:
+        xa, ta = float(anchor[0]), float(anchor[1])
+        if xk[0] + 0.02 < xa < xk[2] - 0.02:
+            ya0 = float(PchipInterpolator(xk, yk)(xa))
+            ya = ya0 + float(np.clip(anchor_trust * (ta - ya0), -anchor_cap, anchor_cap))
+            # a face near the median takes the median's place; else it is a 4th knot
+            keep = [i for i in range(3) if not (i == 1 and abs(xa - xk[1]) < 0.04)]
+            kx, ky = list(xk[keep]), list(yk[keep])
+            j = int(np.searchsorted(kx, xa))
+            xl, yl, xr, yr = kx[j - 1], ky[j - 1], kx[j], ky[j]
+            lo_y = max(yl + slope[0] * (xa - xl), yr - slope[1] * (xr - xa))
+            hi_y = min(yl + slope[1] * (xa - xl), yr - slope[0] * (xr - xa))
+            if lo_y <= hi_y:
+                kx.insert(j, xa); ky.insert(j, float(np.clip(ya, lo_y, hi_y)))
+                xk, yk = np.array(kx), np.array(ky)
     pch = PchipInterpolator(xk, yk)
     dp = pch.derivative()
     lo_m = float(np.clip(dp(xk[0]), 0.5, 1.5))          # beyond what the clip showed: gentle
-    hi_m = float(np.clip(dp(xk[2]), 0.5, 1.5))
+    hi_m = float(np.clip(dp(xk[-1]), 0.5, 1.5))
     top = max(1.0, float(np.max(Lt)))                   # scene-referred whites may sit above 1
-    room = max(top - yk[2], 1e-3)
+    room = max(top - yk[-1], 1e-3)
 
     def f(L):
         L = np.asarray(L, dtype=np.float64)
-        v = pch(np.clip(L, xk[0], xk[2]))
+        v = pch(np.clip(L, xk[0], xk[-1]))
         v = np.where(L < xk[0], yk[0] + (L - xk[0]) * lo_m, v)
-        over = np.maximum(L - xk[2], 0.0)
-        v = np.where(L > xk[2], yk[2] + room * (1.0 - np.exp(-over * hi_m / room)), v)
+        over = np.maximum(L - xk[-1], 0.0)
+        v = np.where(L > xk[-1], yk[-1] + room * (1.0 - np.exp(-over * hi_m / room)), v)
         return v
     return f
 
 
 def fit_look(src_lin: np.ndarray, tgt_lin: np.ndarray, skin_src: np.ndarray | None = None,
              mid_trust: float = 0.5, sat_trust: float = 0.6, sat_cap=(0.65, 1.4),
-             cast_cap: float = 0.045, shift_cap: float = 0.05):
+             cast_cap: float = 0.045, shift_cap: float = 0.05,
+             face_src: np.ndarray | None = None, face_tgt: np.ndarray | None = None):
     """Look transfer in Oklab (no correspondence needed) - the engine's "grade".
 
       tone : `_levels_curve` (black / white point and half of the midtone
@@ -290,6 +313,10 @@ def fit_look(src_lin: np.ndarray, tgt_lin: np.ndarray, skin_src: np.ndarray | No
              within 0.65-1.4x (how colourful a frame is depends on what is in it)
       skin : `skin_src` (per-sample skin-tone probability) keeps skin-toned things
              on their hue - the tint is scaled back until they rotate < 15 degrees
+      faces: `face_src` / `face_tgt` (per-sample: inside a found face, faces.py).
+             Faces in both shots anchor the exposure (`_levels_curve`'s anchor);
+             faces in the source are the skin to protect, instead of whatever
+             the colour-only skin test picked (wheat, beige walls, statues)
 
     Hues are never rotated into other hues. The Intensity slider can push a
     deliberately conservative transfer further; a wrecked picture cannot be undone.
@@ -297,7 +324,14 @@ def fit_look(src_lin: np.ndarray, tgt_lin: np.ndarray, skin_src: np.ndarray | No
     from .colorspace import linear_to_oklab, oklab_to_linear
     S = linear_to_oklab(np.clip(src_lin, 0.0, None))
     T = linear_to_oklab(np.clip(tgt_lin, 0.0, None))
-    Lc = _levels_curve(S[:, 0], T[:, 0], mid_trust=mid_trust)
+    fs = np.asarray(face_src).reshape(-1) if face_src is not None else None
+    ft = np.asarray(face_tgt).reshape(-1) if face_tgt is not None else None
+    if fs is not None and (fs.shape[0] != S.shape[0] or fs.sum() < 200):
+        fs = None
+    if ft is not None and (ft.shape[0] != T.shape[0] or ft.sum() < 200):
+        ft = None
+    anchor = (float(np.median(S[fs, 0])), float(np.median(T[ft, 0]))) if fs is not None and ft is not None else None
+    Lc = _levels_curve(S[:, 0], T[:, 0], mid_trust=mid_trust, anchor=anchor)
     Ws, Wt = _band_weights(S[:, 0]), _band_weights(T[:, 0])
     cast_s = _neutral_cast(S, Ws, cmax=cast_cap)
     cast_t = _neutral_cast(T, Wt, cmax=cast_cap)
@@ -322,20 +356,25 @@ def fit_look(src_lin: np.ndarray, tgt_lin: np.ndarray, skin_src: np.ndarray | No
 
     # Skin-toned things keep their hue: scale the tint back until they do.
     k_tint = 1.0
-    if skin_src is not None:
+    sk = None
+    if fs is not None:
+        sk = fs                                   # real faces: the skin that matters
+    elif skin_src is not None:
         sk = np.asarray(skin_src).reshape(-1) > 0.5
-        if sk.shape[0] == S.shape[0] and sk.sum() >= max(200, int(0.02 * len(S))):
-            v_in = S[sk, 1:].mean(0)
-            d_sk = shift(cs_s[sk], _band_weights(L2s[sk]) @ cast_t, L2s[sk])
-            base = (S[sk, 1:] - cs_s[sk]) * (g * lscale(S[sk, 0], L2s[sk]))[:, None] + cs_s[sk]
-            n_in = float(np.hypot(v_in[0], v_in[1]))
-            for k_tint in (1.0, 0.8, 0.6, 0.4, 0.2, 0.0):
-                v_out = (base + k_tint * d_sk).mean(0)
-                n_out = float(np.hypot(v_out[0], v_out[1]))
-                cosang = float(v_in @ v_out) / max(n_in * n_out, 1e-12)
-                if n_in < 0.01 or (np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))) <= 15.0
-                                   and n_out >= 0.5 * n_in * min(1.0, g)):
-                    break
+        if sk.shape[0] != S.shape[0] or sk.sum() < max(200, int(0.02 * len(S))):
+            sk = None
+    if sk is not None:
+        v_in = S[sk, 1:].mean(0)
+        d_sk = shift(cs_s[sk], _band_weights(L2s[sk]) @ cast_t, L2s[sk])
+        base = (S[sk, 1:] - cs_s[sk]) * (g * lscale(S[sk, 0], L2s[sk]))[:, None] + cs_s[sk]
+        n_in = float(np.hypot(v_in[0], v_in[1]))
+        for k_tint in (1.0, 0.8, 0.6, 0.4, 0.2, 0.0):
+            v_out = (base + k_tint * d_sk).mean(0)
+            n_out = float(np.hypot(v_out[0], v_out[1]))
+            cosang = float(v_in @ v_out) / max(n_in * n_out, 1e-12)
+            if n_in < 0.01 or (np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))) <= 15.0
+                               and n_out >= 0.5 * n_in * min(1.0, g)):
+                break
 
     def f(x: np.ndarray) -> np.ndarray:
         ok = linear_to_oklab(np.clip(np.atleast_2d(x), 0.0, None))
@@ -350,7 +389,7 @@ def fit_look(src_lin: np.ndarray, tgt_lin: np.ndarray, skin_src: np.ndarray | No
         return oklab_to_linear(np.column_stack([L2, rel * gain[:, None] + c_s + d]))
 
     f.kind = "grade"  # type: ignore[attr-defined]
-    f.info = {"sat_gain": g, "tint_kept": k_tint}  # type: ignore[attr-defined]
+    f.info = {"sat_gain": g, "tint_kept": k_tint, "face_anchor": anchor}  # type: ignore[attr-defined]
     return f
 
 

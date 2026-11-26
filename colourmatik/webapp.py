@@ -501,8 +501,12 @@ def _process(src_path: Path, ref_path: Path, mode: str, tf: str, frames: int,
     # refine) cost 1.4GB of downloads and 15-25s per match for gains the field
     # never felt — the product this replaces was "fast and right", so that is
     # the default again. The code stays importable for the future.
+    # how many frames each side's stack holds (stills are never stacked): the
+    # face finder looks at single frames
+    _nf = lambda path, n: n if Path(path).suffix.lower() not in cmio.IMAGE_EXTS else 1
     res = match(src, ref, corresponded=corresponded, tf=tf, look=look, quick=fast,
                 neural=False, refine=False,
+                src_frames=_nf(src_path, src_n), tgt_frames=_nf(ref_path, ref_n),
                 progress=lambda p, m: _set_progress(job_id, 0.16 + p * 0.66, m))
 
     res.notes.extend(_frame_notes)
